@@ -1,0 +1,14 @@
+﻿# DimClaw 运行时示例配置（当前版本主要通过环境变量读取）
+# 可在 systemd 的 Environment= 或 EnvironmentFile= 中注入
+
+# 任务与调度数据目录
+DIMCLAW_DATA_DIR = "/var/lib/dimclaw"
+
+# 日志目录；设为空字符串可禁用文件日志（仅 stdout）
+DIMCLAW_LOG_DIR = "/var/log/dimclaw"
+
+# 最大重试次数
+DIMCLAW_MAX_RETRIES = 3
+
+# 轮询间隔（毫秒）
+DIMCLAW_POLL_INTERVAL_MS = 400
