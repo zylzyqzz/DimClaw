@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - name: Build release
+        run: cargo build --release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dimclaw-${{ matrix.os }}
+          path: target/release/dimclaw${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dimclaw-ubuntu-latest
+          path: release/ubuntu
+      - name: Download windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dimclaw-windows-latest
+          path: release/windows
+      - name: Download mac artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dimclaw-macos-latest
+          path: release/macos
+      - name: Create release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: DimClaw ${{ github.ref_name }}
+      - name: Upload Linux binary
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: dimclaw-linux-x86_64
+          body: Linux binary
+          file: release/ubuntu/dimclaw
+      - name: Upload Windows binary
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: dimclaw-windows-x86_64.exe
+          body: Windows binary
+          file: release/windows/dimclaw.exe
+      - name: Upload macOS binary
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: dimclaw-macos-x86_64
+          body: macOS binary
+          file: release/macos/dimclaw

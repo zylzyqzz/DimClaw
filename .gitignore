@@ -1,6 +1,6 @@
 target/
 data/
 logs/
+*.zip
+*.exe
 *.log
-*.tmp
-Cargo.lock
