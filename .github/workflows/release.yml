@@ -21,9 +21,23 @@ jobs:
           override: true
       - name: Build release
         run: cargo build --release
+      - name: Prepare Linux/macOS artifact
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            mv target/release/dimclaw target/release/dimclaw-linux-x86_64
+          else
+            mv target/release/dimclaw target/release/dimclaw-macos-x86_64
+          fi
+      - name: Prepare Windows artifact
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Rename-Item target/release/dimclaw.exe target/release/dimclaw-windows-x86_64.exe
       - name: Publish release binary
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ matrix.os == 'ubuntu-latest' && 'dimclaw-linux-x86_64' || matrix.os == 'windows-latest' && 'dimclaw-windows-x86_64.exe' || 'dimclaw-macos-x86_64' }}
-          files: target/release/dimclaw${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          files: ${{ matrix.os == 'ubuntu-latest' && 'target/release/dimclaw-linux-x86_64' || matrix.os == 'windows-latest' && 'target/release/dimclaw-windows-x86_64.exe' || 'target/release/dimclaw-macos-x86_64' }}
