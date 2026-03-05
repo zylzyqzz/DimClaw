@@ -24,13 +24,3 @@ impl SkillRegistry {
         self.skills.get(name).cloned()
     }
 }
-
-pub fn build_shell_payload(command: String, timeout_secs: u64) -> serde_json::Value {
-    serde_json::json!({
-        "skill": "shell_command",
-        "timeout_secs": timeout_secs,
-        "input": {
-            "command": command
-        }
-    })
-}

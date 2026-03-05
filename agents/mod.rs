@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod llm_json;
 mod executor;
 mod planner;
 mod recovery;

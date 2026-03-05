@@ -1,17 +1,27 @@
 ﻿use async_trait::async_trait;
 
-use crate::agents::agent::{Agent, AgentContext, AgentOutcome};
+use crate::agents::agent::{Agent, AgentContext, AgentLlm, AgentOutcome};
+use crate::agents::llm_json::{parse_json_with_extract, ExecutorOutput, PlannerOutput};
 use crate::core::logger;
 use crate::core::task::Task;
-use crate::skills::{SkillContext, SkillRegistry};
+use crate::providers::types::ChatRequest;
 
 pub struct ExecutorAgent {
-    skills: SkillRegistry,
+    llm: Option<AgentLlm>,
 }
 
 impl ExecutorAgent {
-    pub fn new(skills: SkillRegistry) -> Self {
-        Self { skills }
+    pub fn new(llm: Option<AgentLlm>) -> Self {
+        Self { llm }
+    }
+
+    fn fallback() -> ExecutorOutput {
+        ExecutorOutput {
+            decision: "fail".to_string(),
+            tool: "no_op".to_string(),
+            args: serde_json::json!({}),
+            reason: "executor_fallback".to_string(),
+        }
     }
 }
 
@@ -22,65 +32,97 @@ impl Agent for ExecutorAgent {
     }
 
     async fn handle(&self, task: &mut Task, ctx: AgentContext) -> AgentOutcome {
-        let skill_name = task
+        if ctx.cancellation.is_cancelled() {
+            return AgentOutcome::cancelled("执行阶段收到取消信号");
+        }
+        logger::log(format!("[Executor] id={} 开始生成执行决策", task.id));
+        let plan: Option<PlannerOutput> = task
             .payload
-            .get("skill")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let skill_input = task.payload.get("input").cloned().unwrap_or_default();
-        let timeout_secs = task
+            .get("plan")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
+        let plan_index = task
             .payload
-            .get("timeout_secs")
+            .get("plan_index")
             .and_then(|v| v.as_u64())
-            .unwrap_or(10);
-        let Some(skill) = self.skills.get(&skill_name) else {
-            return AgentOutcome::fail(format!("技能不存在: {skill_name}"));
+            .unwrap_or(0) as usize;
+
+        let current_step = plan
+            .as_ref()
+            .and_then(|p| p.steps.get(plan_index))
+            .cloned();
+
+        let Some(step) = current_step else {
+            let d = Self::fallback();
+            if let Some(obj) = task.payload.as_object_mut() {
+                obj.insert(
+                    "executor_decision".to_string(),
+                    serde_json::to_value(&d).unwrap_or_default(),
+                );
+            }
+            return AgentOutcome::retry("计划步骤不存在");
         };
 
-        let sk_ctx = SkillContext {
-            task_id: task.id.clone(),
-            timeout_secs,
-            cancellation: ctx.cancellation.clone(),
+        let llm = match &self.llm {
+            Some(v) => v,
+            None => {
+                let d = ExecutorOutput {
+                    decision: if step.tool == "shell_command" || step.tool == "no_op" {
+                        "execute".to_string()
+                    } else {
+                        "fail".to_string()
+                    },
+                    tool: step.tool.clone(),
+                    args: step.args.clone(),
+                    reason: "llm_disabled".to_string(),
+                };
+                if let Some(obj) = task.payload.as_object_mut() {
+                    obj.insert(
+                        "executor_decision".to_string(),
+                        serde_json::to_value(&d).unwrap_or_default(),
+                    );
+                }
+                return if d.decision == "fail" {
+                    AgentOutcome::retry("执行决策失败")
+                } else {
+                    AgentOutcome::success()
+                };
+            }
         };
-        let result = skill.run(sk_ctx, skill_input).await;
-        match result {
-            Ok(r) if r.success => {
-                if let Some(obj) = task.payload.as_object_mut() {
-                    obj.insert(
-                        "execution_result".to_string(),
-                        serde_json::json!({
-                            "stdout": r.stdout,
-                            "stderr": r.stderr,
-                            "exit_code": r.exit_code,
-                            "duration_ms": r.duration_ms
-                        }),
-                    );
-                }
-                logger::log(format!(
-                    "[Executor] 技能执行成功 skill={} code={:?} 耗时={}ms",
-                    skill_name, r.exit_code, r.duration_ms
-                ));
-                AgentOutcome::success()
+
+        let request = ChatRequest {
+            system_prompt: "你是 ExecutorAgent。必须只输出 JSON：{\"decision\":\"execute|skip|fail\",\"tool\":\"shell_command|no_op\",\"args\":{},\"reason\":\"...\"}。若无法执行返回 fail。".to_string(),
+            user_prompt: format!(
+                "任务: {}\n当前步骤: {}",
+                task.title,
+                serde_json::to_string(&step).unwrap_or_default()
+            ),
+            model: llm.model.clone(),
+            temperature: llm.temperature,
+            max_tokens: llm.max_tokens,
+        };
+
+        let decision = match llm.provider.chat(request, ctx.cancellation.clone()).await {
+            Ok(resp) => parse_json_with_extract::<ExecutorOutput>(&resp.content).unwrap_or_else(|| {
+                logger::log("[Executor] 模型输出非 JSON，使用 fail fallback");
+                Self::fallback()
+            }),
+            Err(e) => {
+                logger::log(format!("[Executor] 调用模型失败，使用 fail fallback err={}", e));
+                Self::fallback()
             }
-            Ok(r) => {
-                if let Some(obj) = task.payload.as_object_mut() {
-                    obj.insert(
-                        "execution_result".to_string(),
-                        serde_json::json!({
-                            "stdout": r.stdout,
-                            "stderr": r.stderr,
-                            "exit_code": r.exit_code,
-                            "duration_ms": r.duration_ms
-                        }),
-                    );
-                }
-                AgentOutcome::retry(format!(
-                    "技能退出异常 skill={} code={:?} stderr={}",
-                    skill_name, r.exit_code, r.stderr
-                ))
-            }
-            Err(e) => AgentOutcome::retry(format!("技能执行失败 skill={} err={}", skill_name, e)),
+        };
+
+        if let Some(obj) = task.payload.as_object_mut() {
+            obj.insert(
+                "executor_decision".to_string(),
+                serde_json::to_value(&decision).unwrap_or_default(),
+            );
+        }
+
+        if decision.decision == "fail" {
+            AgentOutcome::retry("执行决策失败")
+        } else {
+            AgentOutcome::success()
         }
     }
 }

@@ -1,11 +1,21 @@
 use async_trait::async_trait;
+use std::sync::Arc;
 
 use crate::core::task::TaskStatus;
+use crate::providers::traits::LlmProvider;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct AgentContext {
     pub cancellation: CancellationToken,
+}
+
+#[derive(Clone)]
+pub struct AgentLlm {
+    pub provider: Arc<dyn LlmProvider>,
+    pub model: String,
+    pub temperature: f32,
+    pub max_tokens: u32,
 }
 
 #[derive(Debug, Clone)]

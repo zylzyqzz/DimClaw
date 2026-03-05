@@ -12,6 +12,8 @@ mod adapters;
 mod configs;
 #[path = "../core/mod.rs"]
 mod core;
+#[path = "../providers/mod.rs"]
+mod providers;
 #[path = "../scheduler/mod.rs"]
 mod scheduler;
 #[path = "../skills/mod.rs"]
@@ -35,7 +37,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    #[command(about = "创建一个测试任务（shell_command）")]
+    #[command(about = "创建一个测试任务")]
     Submit {
         #[arg(long, default_value = "最小测试任务")]
         title: String,
@@ -64,6 +66,8 @@ enum Commands {
         #[arg(long, default_value_t = 10)]
         timeout_secs: u64,
     },
+    #[command(about = "检查运行配置与模型配置")]
+    Doctor,
 }
 
 #[tokio::main]
@@ -72,7 +76,7 @@ async fn main() -> Result<()> {
     ui::init();
 
     let cli = Cli::parse();
-    let config = RuntimeConfig::default();
+    let config = RuntimeConfig::load().unwrap_or_default();
     logger::init(config.log_dir.clone());
     logger::log(format!(
         "[系统] 启动配置 data_dir={} log_dir={} max_retries={} poll_interval_ms={}",
@@ -92,7 +96,7 @@ async fn main() -> Result<()> {
             command,
             timeout_secs,
         } => {
-            let payload = skills::build_shell_payload(command, timeout_secs);
+            let payload = build_task_payload(command, timeout_secs);
             let task = Task::new(title, payload);
             storage.create_task(&task).await?;
             logger::log(format!(
@@ -123,7 +127,7 @@ async fn main() -> Result<()> {
             command,
             timeout_secs,
         } => {
-            let payload = skills::build_shell_payload(command, timeout_secs);
+            let payload = build_task_payload(command, timeout_secs);
             let entry = scheduler::ScheduleEntry::new(title, interval_secs, payload);
             scheduler_store.ensure_dir().await?;
             scheduler_store.add_schedule(entry.clone()).await?;
@@ -167,7 +171,60 @@ async fn main() -> Result<()> {
             }
             logger::log("[系统] 运行时已停止");
         }
+        Commands::Doctor => {
+            run_doctor(&config);
+        }
     }
 
     Ok(())
+}
+
+fn build_task_payload(command: String, timeout_secs: u64) -> serde_json::Value {
+    serde_json::json!({
+        "input": {
+            "command": command,
+            "timeout_secs": timeout_secs
+        }
+    })
+}
+
+fn run_doctor(config: &RuntimeConfig) {
+    logger::log("[Doctor] 开始检查");
+    logger::log(format!(
+        "[Doctor] 配置文件: {}",
+        if config.config_exists() { "存在" } else { "不存在（将使用默认配置）" }
+    ));
+    logger::log(format!(
+        "[Doctor] LLM 开关: {}",
+        if config.llm.enabled { "启用" } else { "关闭" }
+    ));
+
+    match config.selected_provider() {
+        Ok(provider) => {
+            logger::log(format!("[Doctor] provider_name: {}", provider.provider_name));
+            logger::log(format!("[Doctor] protocol: {}", provider.protocol));
+            logger::log(format!("[Doctor] base_url: {}", provider.base_url));
+            logger::log(format!("[Doctor] model: {}", provider.model));
+            logger::log(format!(
+                "[Doctor] api_key: {}",
+                if provider.api_key.trim().is_empty() || provider.api_key.trim() == "YOUR_API_KEY" {
+                    "为空"
+                } else {
+                    "已配置"
+                }
+            ));
+            if provider.base_url.trim().is_empty()
+                || provider.model.trim().is_empty()
+                || provider.api_key.trim().is_empty()
+                || provider.api_key.trim() == "YOUR_API_KEY"
+            {
+                logger::log("[Doctor] 检查结果: 异常（请补全 base_url/model/api_key）");
+            } else {
+                logger::log("[Doctor] 检查结果: 正常");
+            }
+        }
+        Err(e) => {
+            logger::log(format!("[Doctor] 检查结果: 异常，{}", e));
+        }
+    }
 }
