@@ -1,0 +1,51 @@
+﻿:root {
+  --bg: #f5f7fb;
+  --card: #ffffff;
+  --line: #d9dfec;
+  --text: #10233f;
+  --brand: #1f5cd6;
+}
+body {
+  margin: 0;
+  background: linear-gradient(120deg, #edf3ff, #f8fbff);
+  color: var(--text);
+  font-family: "Segoe UI", "PingFang SC", sans-serif;
+}
+.wrap {
+  max-width: 980px;
+  margin: 20px auto;
+  padding: 0 12px;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  margin: 12px 0;
+}
+.hidden { display: none; }
+label { display: block; margin: 8px 0 4px; }
+input, textarea, button {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+button {
+  background: var(--brand);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  margin-top: 8px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+th, td {
+  border-bottom: 1px solid var(--line);
+  padding: 8px;
+  font-size: 13px;
+  text-align: left;
+}

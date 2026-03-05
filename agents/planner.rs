@@ -2,6 +2,7 @@
 
 use crate::agents::agent::{Agent, AgentContext, AgentLlm, AgentOutcome};
 use crate::agents::llm_json::{parse_json_with_extract, PlannerOutput};
+use crate::configs::load_agents;
 use crate::core::logger;
 use crate::core::task::Task;
 use crate::providers::types::ChatRequest;
@@ -78,22 +79,25 @@ impl Agent for PlannerAgent {
             }
         };
 
+        let prompts = load_agents().ok();
+        let system_prompt = prompts
+            .as_ref()
+            .map(|v| v.planner.system_prompt.clone())
+            .unwrap_or_else(|| "你是 PlannerAgent。你必须仅输出 JSON。".to_string());
+        let user_prompt_t = prompts
+            .as_ref()
+            .map(|v| v.planner.user_prompt.clone())
+            .unwrap_or_else(|| "任务：{task_payload}".to_string());
+
         let request = ChatRequest {
-            system_prompt: "你是 PlannerAgent。你必须仅输出 JSON，不要输出任何解释。格式: {\"goal\":\"...\",\"steps\":[{\"id\":1,\"action\":\"...\",\"tool\":\"shell_command|no_op\",\"args\":{}}]}。至少一个 step。".to_string(),
-            user_prompt: format!(
-                "任务标题: {}\n任务输入: {}\n如果发现输入中有 command，请优先生成 shell_command step，args 至少含 command 与 timeout_secs。",
-                task.title,
-                task.payload
-            ),
+            system_prompt,
+            user_prompt: user_prompt_t.replace("{task_payload}", &task.payload.to_string()),
             model: llm.model.clone(),
             temperature: llm.temperature,
             max_tokens: llm.max_tokens,
         };
 
-        let response = llm
-            .provider
-            .chat(request, ctx.cancellation.clone())
-            .await;
+        let response = llm.provider.chat(request, ctx.cancellation.clone()).await;
 
         let plan = match response {
             Ok(resp) => match parse_json_with_extract::<PlannerOutput>(&resp.content) {

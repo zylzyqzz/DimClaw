@@ -2,7 +2,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
@@ -52,6 +52,51 @@ struct RuntimeSection {
 struct LlmSection {
     enabled: Option<bool>,
     provider: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModelProviderEntry {
+    pub name: String,
+    pub protocol: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub timeout_secs: u64,
+    pub max_tokens: u32,
+    pub temperature: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ModelsFile {
+    pub providers: Vec<ModelProviderEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PromptPair {
+    pub system_prompt: String,
+    pub user_prompt: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AgentsFile {
+    pub planner: PromptPair,
+    pub executor: PromptPair,
+    pub verifier: PromptPair,
+    pub recovery: PromptPair,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FeishuChannelConfig {
+    pub enabled: bool,
+    pub app_id: String,
+    pub app_secret: String,
+    pub verification_token: String,
+    pub webhook_url: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChannelsFile {
+    pub feishu: FeishuChannelConfig,
 }
 
 impl Default for RuntimeConfig {
@@ -196,5 +241,91 @@ impl RuntimeConfig {
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(已禁用文件日志)".to_string())
+    }
+}
+
+pub fn ensure_config_files() -> Result<()> {
+    std::fs::create_dir_all("./configs")?;
+    if !Path::new("./configs/models.toml").exists() {
+        save_models(&ModelsFile::default())?;
+    }
+    if !Path::new("./configs/agents.toml").exists() {
+        save_agents(&default_agents())?;
+    }
+    if !Path::new("./configs/channels.toml").exists() {
+        save_channels(&default_channels())?;
+    }
+    Ok(())
+}
+
+pub fn load_models() -> Result<ModelsFile> {
+    ensure_config_files()?;
+    let body = std::fs::read_to_string("./configs/models.toml")?;
+    let file: ModelsFile = toml::from_str(&body).context("解析 models.toml 失败")?;
+    Ok(file)
+}
+
+pub fn save_models(file: &ModelsFile) -> Result<()> {
+    let body = toml::to_string_pretty(file)?;
+    std::fs::write("./configs/models.toml", body)?;
+    Ok(())
+}
+
+pub fn load_agents() -> Result<AgentsFile> {
+    ensure_config_files()?;
+    let body = std::fs::read_to_string("./configs/agents.toml")?;
+    let file: AgentsFile = toml::from_str(&body).context("解析 agents.toml 失败")?;
+    Ok(file)
+}
+
+pub fn save_agents(file: &AgentsFile) -> Result<()> {
+    let body = toml::to_string_pretty(file)?;
+    std::fs::write("./configs/agents.toml", body)?;
+    Ok(())
+}
+
+pub fn load_channels() -> Result<ChannelsFile> {
+    ensure_config_files()?;
+    let body = std::fs::read_to_string("./configs/channels.toml")?;
+    let file: ChannelsFile = toml::from_str(&body).context("解析 channels.toml 失败")?;
+    Ok(file)
+}
+
+pub fn save_channels(file: &ChannelsFile) -> Result<()> {
+    let body = toml::to_string_pretty(file)?;
+    std::fs::write("./configs/channels.toml", body)?;
+    Ok(())
+}
+
+pub fn default_agents() -> AgentsFile {
+    AgentsFile {
+        planner: PromptPair {
+            system_prompt: "你是一个任务规划专家。".to_string(),
+            user_prompt: "任务：{task_payload}".to_string(),
+        },
+        executor: PromptPair {
+            system_prompt: "你是一个执行专家。".to_string(),
+            user_prompt: "步骤：{step_description}".to_string(),
+        },
+        verifier: PromptPair {
+            system_prompt: "你是一个验证专家。".to_string(),
+            user_prompt: "执行结果：{result}".to_string(),
+        },
+        recovery: PromptPair {
+            system_prompt: "你是一个恢复专家。".to_string(),
+            user_prompt: "错误：{error}，重试次数：{retry_count}".to_string(),
+        },
+    }
+}
+
+pub fn default_channels() -> ChannelsFile {
+    ChannelsFile {
+        feishu: FeishuChannelConfig {
+            enabled: false,
+            app_id: String::new(),
+            app_secret: String::new(),
+            verification_token: String::new(),
+            webhook_url: String::new(),
+        },
     }
 }

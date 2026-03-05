@@ -1,0 +1,48 @@
+{
+  "id": "2326bf65-1285-4606-b5fa-bcab0d2ef0f5",
+  "title": "模型测试",
+  "status": "success",
+  "current_agent": "VerifierAgent",
+  "step": 4,
+  "created_at": "2026-03-05T02:58:42.853529800Z",
+  "updated_at": "2026-03-05T02:59:01.427548400Z",
+  "payload": {
+    "execution_result": {
+      "duration_ms": 55,
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "hello_dimclaw_model",
+      "tool": "shell_command"
+    },
+    "executor_decision": {
+      "args": {
+        "command": "echo hello_dimclaw_model",
+        "timeout_secs": 10
+      },
+      "decision": "execute",
+      "reason": "llm_disabled",
+      "tool": "shell_command"
+    },
+    "input": {
+      "command": "echo hello_dimclaw_model",
+      "timeout_secs": 10
+    },
+    "plan": {
+      "goal": "模型测试",
+      "steps": [
+        {
+          "action": "execute command",
+          "args": {
+            "command": "echo hello_dimclaw_model",
+            "timeout_secs": 10
+          },
+          "id": 1,
+          "tool": "shell_command"
+        }
+      ]
+    },
+    "plan_index": 0
+  },
+  "error": null,
+  "retry_count": 0
+}

@@ -2,6 +2,7 @@
 
 use crate::agents::agent::{Agent, AgentContext, AgentLlm, AgentOutcome};
 use crate::agents::llm_json::{parse_json_with_extract, ExecutorOutput, PlannerOutput};
+use crate::configs::load_agents;
 use crate::core::logger;
 use crate::core::task::Task;
 use crate::providers::types::ChatRequest;
@@ -46,10 +47,7 @@ impl Agent for ExecutorAgent {
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as usize;
 
-        let current_step = plan
-            .as_ref()
-            .and_then(|p| p.steps.get(plan_index))
-            .cloned();
+        let current_step = plan.as_ref().and_then(|p| p.steps.get(plan_index)).cloned();
 
         let Some(step) = current_step else {
             let d = Self::fallback();
@@ -89,12 +87,21 @@ impl Agent for ExecutorAgent {
             }
         };
 
+        let prompts = load_agents().ok();
+        let system_prompt = prompts
+            .as_ref()
+            .map(|v| v.executor.system_prompt.clone())
+            .unwrap_or_else(|| "你是 ExecutorAgent。请输出 JSON。".to_string());
+        let user_prompt_t = prompts
+            .as_ref()
+            .map(|v| v.executor.user_prompt.clone())
+            .unwrap_or_else(|| "步骤：{step_description}".to_string());
+
         let request = ChatRequest {
-            system_prompt: "你是 ExecutorAgent。必须只输出 JSON：{\"decision\":\"execute|skip|fail\",\"tool\":\"shell_command|no_op\",\"args\":{},\"reason\":\"...\"}。若无法执行返回 fail。".to_string(),
-            user_prompt: format!(
-                "任务: {}\n当前步骤: {}",
-                task.title,
-                serde_json::to_string(&step).unwrap_or_default()
+            system_prompt,
+            user_prompt: user_prompt_t.replace(
+                "{step_description}",
+                &serde_json::to_string(&step).unwrap_or_default(),
             ),
             model: llm.model.clone(),
             temperature: llm.temperature,

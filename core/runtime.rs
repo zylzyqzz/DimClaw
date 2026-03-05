@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use crate::agents::agent::{Agent, AgentContext, AgentLlm, AgentOutcome, OutcomeKind};
 use crate::agents::llm_json::ExecutorOutput;
 use crate::agents::{ExecutorAgent, PlannerAgent, RecoveryAgent, VerifierAgent};
-use crate::configs::RuntimeConfig;
+use crate::configs::{load_models, RuntimeConfig};
 use crate::core::logger;
 use crate::core::queue::TaskQueue;
 use crate::core::state_machine;
@@ -326,6 +326,26 @@ fn build_llm_ctx(config: &RuntimeConfig) -> Result<Option<AgentLlm>> {
         return Ok(None);
     }
 
+    let model_file_provider = load_models()
+        .ok()
+        .and_then(|m| {
+            m.providers
+                .into_iter()
+                .find(|p| p.name == config.llm.provider)
+        })
+        .map(|p| {
+            (
+                p.protocol,
+                p.name,
+                p.base_url,
+                p.api_key,
+                p.model,
+                p.timeout_secs,
+                p.max_tokens,
+                p.temperature,
+            )
+        });
+
     let provider_cfg = match config.selected_provider() {
         Ok(v) => v,
         Err(e) => {
@@ -334,33 +354,49 @@ fn build_llm_ctx(config: &RuntimeConfig) -> Result<Option<AgentLlm>> {
         }
     };
 
-    if provider_cfg.protocol != "openai_compatible" {
+    let (protocol, provider_name, base_url, api_key, model, timeout_secs, max_tokens, temperature) =
+        if let Some(v) = model_file_provider {
+            v
+        } else {
+            (
+                provider_cfg.protocol.clone(),
+                provider_cfg.provider_name.clone(),
+                provider_cfg.base_url.clone(),
+                provider_cfg.api_key.clone(),
+                provider_cfg.model.clone(),
+                provider_cfg.timeout_secs,
+                provider_cfg.max_tokens,
+                provider_cfg.temperature,
+            )
+        };
+
+    if protocol != "openai_compatible" {
         logger::log(format!(
             "[Provider] 当前仅支持 openai_compatible，实际为 {}，自动禁用 LLM",
-            provider_cfg.protocol
+            protocol
         ));
         return Ok(None);
     }
 
-    let key = provider_cfg.api_key.trim();
+    let key = api_key.trim();
     if key.is_empty() || key == "YOUR_API_KEY" {
         logger::log("[Provider] api_key 未配置，自动禁用 LLM");
         return Ok(None);
     }
 
     let provider = OpenAiCompatibleProvider::new(
-        provider_cfg.provider_name.clone(),
-        provider_cfg.base_url.clone(),
-        provider_cfg.api_key.clone(),
-        provider_cfg.timeout_secs,
+        provider_name.clone(),
+        base_url,
+        api_key,
+        timeout_secs,
         2,
     )?;
     let arc: Arc<dyn LlmProvider> = Arc::new(provider);
 
     Ok(Some(AgentLlm {
         provider: arc,
-        model: provider_cfg.model.clone(),
-        temperature: provider_cfg.temperature,
-        max_tokens: provider_cfg.max_tokens,
+        model,
+        temperature,
+        max_tokens,
     }))
 }

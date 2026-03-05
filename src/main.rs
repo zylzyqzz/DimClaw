@@ -12,6 +12,8 @@ mod adapters;
 mod configs;
 #[path = "../core/mod.rs"]
 mod core;
+#[path = "../feishu/mod.rs"]
+mod feishu;
 #[path = "../providers/mod.rs"]
 mod providers;
 #[path = "../scheduler/mod.rs"]
@@ -68,6 +70,13 @@ enum Commands {
     },
     #[command(about = "检查运行配置与模型配置")]
     Doctor,
+    #[command(about = "启动 Web UI 与飞书 sidecar")]
+    Server {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+    },
 }
 
 #[tokio::main]
@@ -77,6 +86,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let config = RuntimeConfig::load().unwrap_or_default();
+    let _ = configs::ensure_config_files();
     logger::init(config.log_dir.clone());
     logger::log(format!(
         "[系统] 启动配置 data_dir={} log_dir={} max_retries={} poll_interval_ms={}",
@@ -173,6 +183,28 @@ async fn main() -> Result<()> {
         }
         Commands::Doctor => {
             run_doctor(&config);
+        }
+        Commands::Server { host, port } => {
+            let cancel = CancellationToken::new();
+            let sidecar = feishu::FeishuSidecar::new(storage.clone(), cancel.child_token());
+            let _sidecar_handle = tokio::spawn(async move {
+                let _ = sidecar.run().await;
+            });
+
+            let ctrl = cancel.clone();
+            tokio::spawn(async move {
+                if tokio::signal::ctrl_c().await.is_ok() {
+                    logger::log("[系统] 收到 Ctrl+C，正在关闭 Web 服务...");
+                    ctrl.cancel();
+                }
+            });
+
+            let host_for_server = host.clone();
+            let storage_for_server = storage.clone();
+            let server_handle = tokio::task::spawn_blocking(move || {
+                let _ = core::api::run_server(host_for_server, port, storage_for_server);
+            });
+            let _ = server_handle.await;
         }
     }
 

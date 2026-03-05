@@ -2,6 +2,7 @@
 
 use crate::agents::agent::{Agent, AgentContext, AgentLlm, AgentOutcome};
 use crate::agents::llm_json::{parse_json_with_extract, RecoveryOutput};
+use crate::configs::load_agents;
 use crate::core::logger;
 use crate::core::task::{Task, TaskStatus};
 use crate::providers::types::ChatRequest;
@@ -50,14 +51,21 @@ impl Agent for RecoveryAgent {
             }
         };
 
+        let prompts = load_agents().ok();
+        let system_prompt = prompts
+            .as_ref()
+            .map(|v| v.recovery.system_prompt.clone())
+            .unwrap_or_else(|| "你是 RecoveryAgent。请输出 JSON。".to_string());
+        let user_prompt_t = prompts
+            .as_ref()
+            .map(|v| v.recovery.user_prompt.clone())
+            .unwrap_or_else(|| "错误：{error}，重试次数：{retry_count}".to_string());
+
         let request = ChatRequest {
-            system_prompt: "你是 RecoveryAgent。必须只输出 JSON：{\"action\":\"retry_planning|retry_running|fail_task\",\"reason\":\"...\",\"retryable\":true|false}".to_string(),
-            user_prompt: format!(
-                "任务: {}\n当前重试次数: {}\n错误: {}",
-                task.title,
-                task.retry_count,
-                task.error.clone().unwrap_or_default()
-            ),
+            system_prompt,
+            user_prompt: user_prompt_t
+                .replace("{error}", &task.error.clone().unwrap_or_default())
+                .replace("{retry_count}", &task.retry_count.to_string()),
             model: llm.model.clone(),
             temperature: llm.temperature,
             max_tokens: llm.max_tokens,

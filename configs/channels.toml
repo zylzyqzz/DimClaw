@@ -1,0 +1,6 @@
+﻿[feishu]
+enabled = false
+app_id = ""
+app_secret = ""
+verification_token = ""
+webhook_url = ""

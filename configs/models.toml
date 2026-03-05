@@ -1,0 +1,9 @@
+﻿[[providers]]
+name = "nvidia-qwen"
+protocol = "openai_compatible"
+base_url = "https://integrate.api.nvidia.com/v1"
+api_key = ""
+model = "nvidia/qwen/qwen3.5-397b-a17b"
+timeout_secs = 60
+max_tokens = 2048
+temperature = 0.2

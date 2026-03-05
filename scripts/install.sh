@@ -24,3 +24,15 @@ TARGET="${BIN_DIR}/dimclaw"
 curl -fsSL "${URL}" -o "${TARGET}"
 chmod +x "${TARGET}"
 echo "DimClaw 已安装到 ${TARGET}"
+echo "是否立即启动 Web UI? (y/n)"
+read -r ans
+if [[ "${ans}" == "y" || "${ans}" == "Y" ]]; then
+  nohup "${TARGET}" server >/tmp/dimclaw_server.log 2>&1 &
+  sleep 1
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "http://127.0.0.1:8080" >/dev/null 2>&1 || true
+  elif command -v open >/dev/null 2>&1; then
+    open "http://127.0.0.1:8080" || true
+  fi
+  echo "DimClaw Web UI 已启动: http://127.0.0.1:8080"
+fi

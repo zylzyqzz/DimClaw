@@ -1,0 +1,15 @@
+﻿[planner]
+system_prompt = "你是一个任务规划专家..."
+user_prompt = "任务：{task_payload}"
+
+[executor]
+system_prompt = "你是一个执行专家..."
+user_prompt = "步骤：{step_description}"
+
+[verifier]
+system_prompt = "你是一个验证专家..."
+user_prompt = "执行结果：{result}"
+
+[recovery]
+system_prompt = "你是一个恢复专家..."
+user_prompt = "错误：{error}，重试次数：{retry_count}"
