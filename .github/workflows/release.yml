@@ -11,37 +11,28 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - name: Prepare Windows toolchain
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          rustup default stable-x86_64-pc-windows-msvc
-          rustup show
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
       - name: Build release
         run: cargo build --release
-      - name: Prepare Linux/macOS artifact
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'macos-latest'
+      - name: List artifacts
+        run: ls -la target/release
         shell: bash
-        run: |
-          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            mv target/release/dimclaw target/release/dimclaw-linux-x86_64
-          else
-            mv target/release/dimclaw target/release/dimclaw-macos-x86_64
-          fi
+      - name: Prepare Linux artifact
+        if: matrix.os == 'ubuntu-latest'
+        run: mv target/release/dimclaw target/release/dimclaw-linux-x86_64
+      - name: Prepare macOS artifact
+        if: matrix.os == 'macos-latest'
+        run: mv target/release/dimclaw target/release/dimclaw-macos-x86_64
       - name: Prepare Windows artifact
         if: matrix.os == 'windows-latest'
+        run: mv target/release/dimclaw.exe target/release/dimclaw-windows-x86_64.exe
         shell: pwsh
-        run: |
-          Rename-Item target/release/dimclaw.exe target/release/dimclaw-windows-x86_64.exe
-      - name: Publish release binary
+      - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: ${{ matrix.os == 'ubuntu-latest' && 'dimclaw-linux-x86_64' || matrix.os == 'windows-latest' && 'dimclaw-windows-x86_64.exe' || 'dimclaw-macos-x86_64' }}
-          files: ${{ matrix.os == 'ubuntu-latest' && 'target/release/dimclaw-linux-x86_64' || matrix.os == 'windows-latest' && 'target/release/dimclaw-windows-x86_64.exe' || 'target/release/dimclaw-macos-x86_64' }}
+          files: |
+            ${{ matrix.os == 'ubuntu-latest' && 'target/release/dimclaw-linux-x86_64' || '' }}
+            ${{ matrix.os == 'windows-latest' && 'target/release/dimclaw-windows-x86_64.exe' || '' }}
+            ${{ matrix.os == 'macos-latest' && 'target/release/dimclaw-macos-x86_64' || '' }}
