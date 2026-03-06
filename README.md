@@ -2,7 +2,7 @@
 
 <div align="center">
 
-**一个本地优先、超轻量、多智能体协作的执行框架**
+**本地优先、超轻量、可扩展的 Rust 多智能体执行框架，围绕任务状态机、执行闭环与 Provider/Channel/Tool 模块化扩展设计。**
 
 [![CI](https://github.com/zylzyqzz/DimClaw/actions/workflows/ci.yml/badge.svg)](https://github.com/zylzyqzz/DimClaw/actions/workflows/ci.yml)
 [![Release](https://github.com/zylzyqzz/DimClaw/actions/workflows/release.yml/badge.svg)](https://github.com/zylzyqzz/DimClaw/actions/workflows/release.yml)
