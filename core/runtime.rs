@@ -8,9 +8,9 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 use crate::agents::agent::{Agent, AgentContext, AgentLlm, AgentOutcome, OutcomeKind};
-use crate::agents::llm_json::ExecutorOutput;
-use crate::agents::{ExecutorAgent, PlannerAgent, RecoveryAgent, VerifierAgent};
-use crate::configs::{load_models, RuntimeConfig};
+use crate::agents::llm_json::{ExecutorOutput, PlannerOutput};
+use crate::agents::{CustomAgent, ExecutorAgent, PlannerAgent, RecoveryAgent, VerifierAgent};
+use crate::configs::{list_custom_agents, load_models, RuntimeConfig};
 use crate::core::logger;
 use crate::core::queue::TaskQueue;
 use crate::core::state_machine;
@@ -29,6 +29,7 @@ pub struct Runtime {
     executor: ExecutorAgent,
     verifier: VerifierAgent,
     recovery: RecoveryAgent,
+    custom_agents: Vec<CustomAgent>,
     skills: SkillRegistry,
 }
 
@@ -39,6 +40,11 @@ impl Runtime {
         cancel: CancellationToken,
     ) -> Result<Self> {
         let llm = build_llm_ctx(&config)?;
+        let mut custom_agents = Vec::new();
+        for cfg in list_custom_agents().unwrap_or_default() {
+            custom_agents.push(CustomAgent::new(cfg, llm.clone()));
+        }
+
         Ok(Self {
             config,
             storage,
@@ -48,6 +54,7 @@ impl Runtime {
             executor: ExecutorAgent::new(llm.clone()),
             verifier: VerifierAgent::new(llm.clone()),
             recovery: RecoveryAgent::new(llm),
+            custom_agents,
             skills: SkillRegistry::default(),
         })
     }
@@ -110,7 +117,7 @@ impl Runtime {
 
             if let Some(next) = state_machine::pre_agent_transition(&task.status) {
                 task.status = next;
-                task.current_agent = Some("PlannerAgent".to_string());
+                task.current_agent = Some("Planner".to_string());
                 task.step += 1;
                 task.touch();
                 self.storage.save_task(&task).await?;
@@ -121,13 +128,16 @@ impl Runtime {
                 continue;
             }
 
-            let agent: &dyn Agent = match task.status {
-                TaskStatus::Planning => &self.planner,
-                TaskStatus::Running => &self.executor,
-                TaskStatus::Verifying => &self.verifier,
-                TaskStatus::Retrying => &self.recovery,
+            let (agent, phase_key): (&dyn Agent, &str) = match task.status {
+                TaskStatus::Planning => (&self.planner, "planning"),
+                TaskStatus::Running => (&self.executor, "running"),
+                TaskStatus::Verifying => (&self.verifier, "verifying"),
+                TaskStatus::Retrying => (&self.recovery, "recovery"),
                 _ => return Ok(()),
             };
+
+            self.run_custom_phase(&format!("before_{}", phase_key), &mut task)
+                .await;
 
             task.current_agent = Some(agent.name().to_string());
             task.updated_at = Utc::now();
@@ -152,7 +162,24 @@ impl Runtime {
                 outcome = self.execute_executor_decision(&mut task).await;
             }
 
+            if matches!(outcome.kind, OutcomeKind::Success) {
+                self.run_custom_phase(&format!("after_{}", phase_key), &mut task)
+                    .await;
+            }
+
             self.apply_transition(task, outcome).await?;
+        }
+    }
+
+    async fn run_custom_phase(&self, phase: &str, task: &mut Task) {
+        for agent in &self.custom_agents {
+            if !agent.cfg.enabled || agent.cfg.phase != phase {
+                continue;
+            }
+            let ctx = AgentContext {
+                cancellation: self.cancel.child_token(),
+            };
+            let _ = agent.handle(task, ctx).await;
         }
     }
 
@@ -166,123 +193,102 @@ impl Runtime {
             return AgentOutcome::retry("缺少执行决策");
         };
 
-        match decision.decision.as_str() {
-            "skip" => {
-                if let Some(obj) = task.payload.as_object_mut() {
-                    obj.insert(
-                        "execution_result".to_string(),
-                        serde_json::json!({
-                            "stdout": "",
-                            "stderr": "",
-                            "exit_code": 0,
-                            "duration_ms": 0,
-                            "tool": decision.tool,
-                            "reason": decision.reason
-                        }),
-                    );
-                }
-                AgentOutcome::success()
-            }
+        let plan: Option<PlannerOutput> = task
+            .payload
+            .get("plan")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
+        let total_steps = plan.map(|p| p.steps.len()).unwrap_or(1);
+        let mut plan_index = task
+            .payload
+            .get("plan_index")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+
+        let outcome = match decision.decision.as_str() {
+            "skip" => AgentOutcome::success(),
             "execute" => {
                 if decision.tool == "no_op" {
-                    if let Some(obj) = task.payload.as_object_mut() {
-                        obj.insert(
-                            "execution_result".to_string(),
-                            serde_json::json!({
-                                "stdout": "",
-                                "stderr": "",
-                                "exit_code": 0,
-                                "duration_ms": 0,
-                                "tool": "no_op"
-                            }),
-                        );
-                    }
-                    return AgentOutcome::success();
-                }
+                    AgentOutcome::success()
+                } else {
+                    let timeout_secs = decision
+                        .args
+                        .get("timeout_secs")
+                        .and_then(|v| v.as_u64())
+                        .or_else(|| {
+                            task.payload
+                                .get("input")
+                                .and_then(|v| v.get("timeout_secs"))
+                                .and_then(|v| v.as_u64())
+                        })
+                        .unwrap_or(10);
 
-                if decision.tool != "shell_command" {
-                    return AgentOutcome::retry(format!("不支持的工具: {}", decision.tool));
-                }
+                    let Some(skill) = self.skills.get(&decision.tool) else {
+                        return AgentOutcome::retry(format!("技能不存在: {}", decision.tool));
+                    };
 
-                let command = decision
-                    .args
-                    .get("command")
-                    .and_then(|v| v.as_str())
-                    .map(|v| v.to_string())
-                    .or_else(|| {
-                        task.payload
+                    let mut skill_input = decision.args.clone();
+                    if decision.tool == "shell_command"
+                        && skill_input.get("command").and_then(|v| v.as_str()).is_none()
+                    {
+                        if let Some(command) = task
+                            .payload
                             .get("input")
                             .and_then(|v| v.get("command"))
                             .and_then(|v| v.as_str())
-                            .map(|v| v.to_string())
-                    });
-
-                let timeout_secs = decision
-                    .args
-                    .get("timeout_secs")
-                    .and_then(|v| v.as_u64())
-                    .or_else(|| {
-                        task.payload
-                            .get("input")
-                            .and_then(|v| v.get("timeout_secs"))
-                            .and_then(|v| v.as_u64())
-                    })
-                    .unwrap_or(10);
-
-                let Some(command) = command else {
-                    return AgentOutcome::retry("shell_command 缺少 command".to_string());
-                };
-
-                let Some(skill) = self.skills.get("shell_command") else {
-                    return AgentOutcome::fail("内置技能 shell_command 不存在".to_string());
-                };
-                let sk_ctx = SkillContext {
-                    task_id: task.id.clone(),
-                    timeout_secs,
-                    cancellation: self.cancel.child_token(),
-                };
-                let result = skill
-                    .run(sk_ctx, serde_json::json!({"command": command}))
-                    .await;
-                match result {
-                    Ok(r) if r.success => {
-                        if let Some(obj) = task.payload.as_object_mut() {
-                            obj.insert(
-                                "execution_result".to_string(),
-                                serde_json::json!({
-                                    "stdout": r.stdout,
-                                    "stderr": r.stderr,
-                                    "exit_code": r.exit_code,
-                                    "duration_ms": r.duration_ms,
-                                    "tool": "shell_command"
-                                }),
-                            );
+                        {
+                            skill_input = serde_json::json!({
+                                "command": command
+                            });
                         }
-                        AgentOutcome::success()
                     }
-                    Ok(r) => {
-                        if let Some(obj) = task.payload.as_object_mut() {
-                            obj.insert(
-                                "execution_result".to_string(),
-                                serde_json::json!({
-                                    "stdout": r.stdout,
-                                    "stderr": r.stderr,
-                                    "exit_code": r.exit_code,
-                                    "duration_ms": r.duration_ms,
-                                    "tool": "shell_command"
-                                }),
-                            );
+
+                    let sk_ctx = SkillContext {
+                        task_id: task.id.clone(),
+                        timeout_secs,
+                        cancellation: self.cancel.child_token(),
+                    };
+                    match skill.run(sk_ctx, skill_input).await {
+                        Ok(r) => {
+                            if let Some(obj) = task.payload.as_object_mut() {
+                                obj.insert(
+                                    "execution_result".to_string(),
+                                    serde_json::json!({
+                                        "stdout": r.stdout,
+                                        "stderr": r.stderr,
+                                        "exit_code": r.exit_code,
+                                        "duration_ms": r.duration_ms,
+                                        "tool": decision.tool
+                                    }),
+                                );
+                            }
+                            if r.success {
+                                AgentOutcome::success()
+                            } else {
+                                AgentOutcome::retry(format!(
+                                    "技能执行失败 code={:?} stderr={}",
+                                    r.exit_code, r.stderr
+                                ))
+                            }
                         }
-                        AgentOutcome::retry(format!(
-                            "技能执行失败 code={:?} stderr={}",
-                            r.exit_code, r.stderr
-                        ))
+                        Err(e) => AgentOutcome::retry(format!("技能执行异常 err={}", e)),
                     }
-                    Err(e) => AgentOutcome::retry(format!("技能执行异常 err={}", e)),
                 }
             }
             _ => AgentOutcome::retry("执行决策失败".to_string()),
+        };
+
+        if matches!(outcome.kind, OutcomeKind::Success) {
+            plan_index += 1;
+            if let Some(obj) = task.payload.as_object_mut() {
+                obj.insert("plan_index".to_string(), serde_json::json!(plan_index));
+            }
+            if plan_index < total_steps {
+                return AgentOutcome::success_with_next(TaskStatus::Running);
+            }
+            return AgentOutcome::success_with_next(TaskStatus::Verifying);
         }
+
+        outcome
     }
 
     async fn apply_transition(&self, mut task: Task, outcome: AgentOutcome) -> Result<()> {
@@ -384,13 +390,7 @@ fn build_llm_ctx(config: &RuntimeConfig) -> Result<Option<AgentLlm>> {
         return Ok(None);
     }
 
-    let provider = OpenAiCompatibleProvider::new(
-        provider_name.clone(),
-        base_url,
-        api_key,
-        timeout_secs,
-        2,
-    )?;
+    let provider = OpenAiCompatibleProvider::new(provider_name.clone(), base_url, api_key, timeout_secs, 2)?;
     let arc: Arc<dyn LlmProvider> = Arc::new(provider);
 
     Ok(Some(AgentLlm {

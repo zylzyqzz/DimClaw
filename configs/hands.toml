@@ -1,0 +1,9 @@
+﻿[[hands]]
+name = "lead"
+enabled = true
+interval = 86400
+
+[[hands]]
+name = "monitor"
+enabled = true
+interval = 60

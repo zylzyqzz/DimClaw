@@ -24,7 +24,10 @@ pub fn decide_transition(task: &Task, outcome: &AgentOutcome, max_retries: u32) 
             set_error: outcome.message.clone(),
         },
         OutcomeKind::Success => {
-            let next = match status {
+            let next = if let Some(suggested) = outcome.suggestion.clone() {
+                suggested
+            } else {
+                match status {
                 TaskStatus::Planning => TaskStatus::Running,
                 TaskStatus::Running => TaskStatus::Verifying,
                 TaskStatus::Verifying => TaskStatus::Success,
@@ -33,6 +36,7 @@ pub fn decide_transition(task: &Task, outcome: &AgentOutcome, max_retries: u32) 
                     .clone()
                     .unwrap_or(TaskStatus::Planning),
                 _ => status.clone(),
+                }
             };
             Transition {
                 next_status: next,

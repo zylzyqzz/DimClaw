@@ -1,0 +1,11 @@
+enabled = false
+host = "127.0.0.1"
+port = 19792
+entry = "telegram-plugin.exe"
+args = []
+app_id = ""
+app_secret = ""
+verify_token = ""
+bot_token = ""
+
+[extra]

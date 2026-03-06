@@ -1,6 +1,59 @@
 ﻿[feishu]
 enabled = false
+plugin_installed = false
 app_id = ""
 app_secret = ""
-verification_token = ""
-webhook_url = ""
+verify_token = ""
+mode = "single"
+single_agent = "Planner"
+default_agent = "Planner"
+agents = ["Planner", "Executor", "Verifier", "Recovery"]
+
+[feishu.agent_map.Planner]
+enabled = true
+keywords = ["规划", "计划"]
+style = "formal"
+
+[feishu.agent_map.Executor]
+enabled = true
+keywords = ["执行", "运行"]
+style = "concise"
+
+[feishu.agent_map.Verifier]
+enabled = true
+keywords = ["检查", "验证"]
+style = "strict"
+
+[feishu.agent_map.Recovery]
+enabled = true
+keywords = ["恢复", "重试"]
+style = "helpful"
+
+[telegram]
+enabled = false
+plugin_installed = false
+bot_token = ""
+mode = "single"
+single_agent = "Planner"
+default_agent = "Planner"
+agents = ["Planner", "Executor", "Verifier", "Recovery"]
+
+[telegram.agent_map.Planner]
+enabled = true
+keywords = []
+style = ""
+
+[telegram.agent_map.Executor]
+enabled = true
+keywords = []
+style = ""
+
+[telegram.agent_map.Verifier]
+enabled = true
+keywords = []
+style = ""
+
+[telegram.agent_map.Recovery]
+enabled = true
+keywords = []
+style = ""

@@ -2,22 +2,41 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>DimClaw 控制台</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DimClaw V0.4</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <div class="wrap">
-    <h1>DimClaw 配置向导</h1>
-    <div id="wizard" class="card"></div>
-    <div id="dashboard" class="card hidden">
-      <h2>任务历史</h2>
-      <table id="tasks">
-        <thead><tr><th>ID</th><th>标题</th><th>状态</th><th>步数</th><th>重试</th><th>更新时间</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">DimClaw V0.4</div>
+      <div class="nav" id="nav">
+        <button data-tab="chat" class="active">对话(Chat)</button>
+        <button data-tab="models">模型配置(Model Config)</button>
+        <button data-tab="channels">通道配置(Channel Config)</button>
+        <button data-tab="agents">智能体配置(Agent Config)</button>
+        <button data-tab="skills">技能管理(Skill Manager)</button>
+        <button data-tab="marketplace">技能市场(Marketplace)</button>
+        <button data-tab="hands">自主任务(Hands)</button>
+        <button data-tab="plugins">插件管理(Plugin Manager)</button>
+        <button data-tab="audit">审计日志(Audit)</button>
+        <button data-tab="system">系统设置(System)</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1 id="page-title">对话(Chat)</h1>
+          <p class="sub" id="page-sub">打开即对话，支持技能调用与多智能体回复</p>
+        </div>
+        <div class="service-status" id="service-status"></div>
+      </header>
+
+      <section id="panel"></section>
+    </main>
   </div>
+
   <script src="/script.js"></script>
 </body>
 </html>

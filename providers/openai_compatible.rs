@@ -221,3 +221,78 @@ fn backoff_ms(attempt: u32) -> u64 {
     let pow = 1u64 << attempt.min(5);
     base * pow
 }
+
+pub struct OpenAiProviderAdapter {
+    inner: OpenAiCompatibleProvider,
+    model: String,
+}
+
+impl OpenAiProviderAdapter {
+    pub fn new(inner: OpenAiCompatibleProvider, model: String) -> Self {
+        Self { inner, model }
+    }
+}
+
+#[async_trait]
+impl crate::core::traits::provider::Provider for OpenAiProviderAdapter {
+    fn name(&self) -> &str {
+        &self.inner.provider_name
+    }
+
+    async fn chat(
+        &self,
+        req: crate::core::traits::provider::ChatRequest,
+    ) -> anyhow::Result<crate::core::traits::provider::ChatResponse> {
+        let user_prompt = req
+            .messages
+            .iter()
+            .map(|m| format!("{}: {}", m.role, m.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let out = self
+            .inner
+            .chat(
+                crate::providers::types::ChatRequest {
+                    system_prompt: "You are an assistant.".to_string(),
+                    user_prompt,
+                    model: self.model.clone(),
+                    temperature: req.temperature,
+                    max_tokens: req.max_tokens,
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        Ok(crate::core::traits::provider::ChatResponse {
+            content: out.content,
+            tool_calls: vec![],
+            usage: crate::core::traits::provider::TokenUsage {
+                prompt_tokens: out.usage.as_ref().and_then(|u| u.prompt_tokens).unwrap_or(0),
+                completion_tokens: out
+                    .usage
+                    .as_ref()
+                    .and_then(|u| u.completion_tokens)
+                    .unwrap_or(0),
+                total_tokens: out.usage.as_ref().and_then(|u| u.total_tokens).unwrap_or(0),
+            },
+        })
+    }
+
+    async fn embed(&self, text: &str) -> anyhow::Result<Vec<f32>> {
+        let mut out = Vec::new();
+        let bytes = text.as_bytes();
+        for i in 0..64 {
+            out.push(*bytes.get(i % bytes.len().max(1)).unwrap_or(&0) as f32 / 255.0);
+        }
+        Ok(out)
+    }
+
+    fn models(&self) -> Vec<crate::core::traits::provider::ModelInfo> {
+        vec![crate::core::traits::provider::ModelInfo {
+            id: self.model.clone(),
+            display_name: self.model.clone(),
+        }]
+    }
+}

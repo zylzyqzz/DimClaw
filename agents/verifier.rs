@@ -1,11 +1,11 @@
-﻿use async_trait::async_trait;
+﻿use anyhow::Result;
+use async_trait::async_trait;
+use serde_json::Value;
 
-use crate::agents::agent::{Agent, AgentContext, AgentLlm, AgentOutcome};
-use crate::agents::llm_json::{parse_json_with_extract, VerifierOutput};
-use crate::configs::load_agents;
+use crate::agents::agent::{llm_generate, Agent, AgentContext, AgentLlm, AgentOutcome, MessageContext};
+use crate::agents::llm_json::VerifierOutput;
 use crate::core::logger;
 use crate::core::task::Task;
-use crate::providers::types::ChatRequest;
 
 pub struct VerifierAgent {
     llm: Option<AgentLlm>,
@@ -15,78 +15,55 @@ impl VerifierAgent {
     pub fn new(llm: Option<AgentLlm>) -> Self {
         Self { llm }
     }
-
-    fn fallback() -> VerifierOutput {
-        VerifierOutput {
-            verdict: "retry".to_string(),
-            reason: "verifier_fallback".to_string(),
-            evidence: "invalid_json".to_string(),
-        }
-    }
 }
 
 #[async_trait]
 impl Agent for VerifierAgent {
-    fn name(&self) -> &'static str {
-        "VerifierAgent"
+    fn name(&self) -> &str {
+        "Verifier"
     }
 
     async fn handle(&self, task: &mut Task, ctx: AgentContext) -> AgentOutcome {
         if ctx.cancellation.is_cancelled() {
             return AgentOutcome::cancelled("校验阶段收到取消信号");
         }
+
         logger::log(format!("[Verifier] id={} 开始校验", task.id));
 
-        let llm = match &self.llm {
-            Some(v) => v,
-            None => {
-                let code = task
-                    .payload
-                    .get("execution_result")
-                    .and_then(|v| v.get("exit_code"))
-                    .and_then(|v| v.as_i64());
-                return if code == Some(0) {
-                    AgentOutcome::success()
-                } else {
-                    AgentOutcome::retry(format!("校验未通过: exit_code={code:?}"))
-                };
-            }
-        };
+        let verdict = if let Some(llm) = &self.llm {
+            let result = task.payload.get("execution_result").cloned().unwrap_or_default();
+            let text = llm_generate(
+                llm,
+                "你是验证智能体。仅输出 JSON: {\"verdict\":\"pass|fail|retry\",\"reason\":\"...\",\"evidence\":\"...\"}".to_string(),
+                format!("执行结果: {}", result),
+                ctx.cancellation.clone(),
+            )
+            .await
+            .unwrap_or_default();
 
-        let prompts = load_agents().ok();
-        let system_prompt = prompts
-            .as_ref()
-            .map(|v| v.verifier.system_prompt.clone())
-            .unwrap_or_else(|| "你是 VerifierAgent。请输出 JSON。".to_string());
-        let user_prompt_t = prompts
-            .as_ref()
-            .map(|v| v.verifier.user_prompt.clone())
-            .unwrap_or_else(|| "执行结果：{result}".to_string());
-
-        let request = ChatRequest {
-            system_prompt,
-            user_prompt: user_prompt_t.replace(
-                "{result}",
-                &task
-                    .payload
-                    .get("execution_result")
-                    .cloned()
-                    .unwrap_or_default()
-                    .to_string(),
-            ),
-            model: llm.model.clone(),
-            temperature: llm.temperature,
-            max_tokens: llm.max_tokens,
-        };
-
-        let verdict = match llm.provider.chat(request, ctx.cancellation.clone()).await {
-            Ok(resp) => parse_json_with_extract::<VerifierOutput>(&resp.content).unwrap_or_else(|| {
-                logger::log("[Verifier] 模型输出解析失败，进入 retry fallback");
-                Self::fallback()
-            }),
-            Err(e) => {
-                logger::log(format!("[Verifier] 调用模型失败，进入 retry fallback err={}", e));
-                Self::fallback()
+            crate::agents::llm_json::parse_json_with_extract::<VerifierOutput>(&text).unwrap_or(VerifierOutput {
+                verdict: "retry".to_string(),
+                reason: "verifier_fallback_json_parse".to_string(),
+                evidence: "invalid_json".to_string(),
+            })
+        } else {
+            let code = task
+                .payload
+                .get("execution_result")
+                .and_then(|v| v.get("exit_code"))
+                .and_then(|v| v.as_i64());
+            if code == Some(0) {
+                VerifierOutput {
+                    verdict: "pass".to_string(),
+                    reason: "exit_code=0".to_string(),
+                    evidence: "local".to_string(),
+                }
+            } else {
+                VerifierOutput {
+                    verdict: "retry".to_string(),
+                    reason: format!("exit_code={:?}", code),
+                    evidence: "local".to_string(),
+                }
             }
         };
 
@@ -102,5 +79,23 @@ impl Agent for VerifierAgent {
             "fail" => AgentOutcome::fail(verdict.reason),
             _ => AgentOutcome::retry(verdict.reason),
         }
+    }
+
+    fn should_handle(&self, ctx: &MessageContext) -> bool {
+        let m = ctx.message.to_lowercase();
+        m.contains("验证") || m.contains("检查") || m.contains("verify")
+    }
+
+    async fn generate_reply(&self, ctx: &MessageContext, _history: &[Value]) -> Result<String> {
+        if let Some(llm) = &self.llm {
+            return llm_generate(
+                llm,
+                "你是验证智能体，擅长审查正确性。".to_string(),
+                ctx.message.clone(),
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await;
+        }
+        Ok(format!("[Verifier] 建议检查执行结果与期望是否一致：{}", ctx.message))
     }
 }

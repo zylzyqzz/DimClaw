@@ -10,14 +10,20 @@ mod agents;
 mod adapters;
 #[path = "../configs/mod.rs"]
 mod configs;
+#[path = "../channels/mod.rs"]
+mod channels;
 #[path = "../core/mod.rs"]
 mod core;
-#[path = "../feishu/mod.rs"]
-mod feishu;
+#[path = "../memory/mod.rs"]
+mod memory;
 #[path = "../providers/mod.rs"]
 mod providers;
+#[path = "../plugins/mod.rs"]
+mod plugins;
 #[path = "../scheduler/mod.rs"]
 mod scheduler;
+#[path = "../security/mod.rs"]
+mod security;
 #[path = "../skills/mod.rs"]
 mod skills;
 #[path = "../ui/mod.rs"]
@@ -186,10 +192,8 @@ async fn main() -> Result<()> {
         }
         Commands::Server { host, port } => {
             let cancel = CancellationToken::new();
-            let sidecar = feishu::FeishuSidecar::new(storage.clone(), cancel.child_token());
-            let _sidecar_handle = tokio::spawn(async move {
-                let _ = sidecar.run().await;
-            });
+            let _ = plugins::ensure_initialized(format!("http://{}:{}", host, port)).await;
+            let _ = plugins::auto_start_enabled_plugins().await;
 
             let ctrl = cancel.clone();
             tokio::spawn(async move {
@@ -258,5 +262,16 @@ fn run_doctor(config: &RuntimeConfig) {
         Err(e) => {
             logger::log(format!("[Doctor] 检查结果: 异常，{}", e));
         }
+    }
+
+    match configs::load_master() {
+        Ok(master) => {
+            logger::log(format!(
+                "[Doctor] 认主状态: {}",
+                if master.initialized { "已完成" } else { "未完成" }
+            ));
+            logger::log(format!("[Doctor] 智能体名称: {}", master.name));
+        }
+        Err(e) => logger::log(format!("[Doctor] 认主配置读取失败: {}", e)),
     }
 }

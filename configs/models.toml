@@ -1,9 +1,47 @@
-﻿[[providers]]
+[[providers]]
 name = "nvidia-qwen"
 protocol = "openai_compatible"
 base_url = "https://integrate.api.nvidia.com/v1"
-api_key = ""
+api_key = "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"
 model = "nvidia/qwen/qwen3.5-397b-a17b"
 timeout_secs = 60
 max_tokens = 2048
-temperature = 0.2
+temperature = 0.20000000298023224
+enabled = true
+default = false
+
+[[providers]]
+name = "zhipu-glm"
+protocol = "openai_compatible"
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+api_key = "c2aa7d4e8d444cf5bb800dbe0c25d198.ppPv3KUNpT9MTId3"
+model = "glm-4.5"
+timeout_secs = 60
+max_tokens = 2048
+temperature = 0.20000000298023224
+enabled = true
+default = false
+
+[[providers]]
+name = "kimi-k2.5"
+protocol = "openai_compatible"
+base_url = "https://aigw-gzgy2.cucloud.cn:8443/v1"
+api_key = "sk-sp-KHwVjUo4hDTB95QRUNE6WZIO4L7h7yNX"
+model = "kimi-k2.5"
+timeout_secs = 60
+max_tokens = 2048
+temperature = 0.20000000298023224
+enabled = true
+default = false
+
+[[providers]]
+name = "MiniMax-M2.5"
+protocol = "openai_compatible"
+base_url = "https://aigw-gzgy2.cucloud.cn:8443/v1"
+api_key = "sk-sp-KHwVjUo4hDTB95QRUNE6WZIO4L7h7yNX"
+model = "MiniMax-M2.5"
+timeout_secs = 60
+max_tokens = 2048
+temperature = 0.20000000298023224
+enabled = true
+default = true

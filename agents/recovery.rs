@@ -1,11 +1,11 @@
-﻿use async_trait::async_trait;
+﻿use anyhow::Result;
+use async_trait::async_trait;
+use serde_json::Value;
 
-use crate::agents::agent::{Agent, AgentContext, AgentLlm, AgentOutcome};
-use crate::agents::llm_json::{parse_json_with_extract, RecoveryOutput};
-use crate::configs::load_agents;
+use crate::agents::agent::{llm_generate, Agent, AgentContext, AgentLlm, AgentOutcome, MessageContext};
+use crate::agents::llm_json::RecoveryOutput;
 use crate::core::logger;
 use crate::core::task::{Task, TaskStatus};
-use crate::providers::types::ChatRequest;
 
 pub struct RecoveryAgent {
     llm: Option<AgentLlm>,
@@ -15,70 +15,51 @@ impl RecoveryAgent {
     pub fn new(llm: Option<AgentLlm>) -> Self {
         Self { llm }
     }
-
-    fn fallback() -> RecoveryOutput {
-        RecoveryOutput {
-            action: "fail_task".to_string(),
-            reason: "recovery_fallback".to_string(),
-            retryable: false,
-        }
-    }
 }
 
 #[async_trait]
 impl Agent for RecoveryAgent {
-    fn name(&self) -> &'static str {
-        "RecoveryAgent"
+    fn name(&self) -> &str {
+        "Recovery"
     }
 
     async fn handle(&self, task: &mut Task, ctx: AgentContext) -> AgentOutcome {
         if ctx.cancellation.is_cancelled() {
             return AgentOutcome::cancelled("恢复阶段收到取消信号");
         }
-        logger::log(format!(
-            "[Recovery] id={} 第 {} 次重试恢复",
-            task.id, task.retry_count
-        ));
 
-        let llm = match &self.llm {
-            Some(v) => v,
-            None => {
-                return if task.retry_count >= 3 {
-                    AgentOutcome::success_with_next(TaskStatus::Failed)
-                } else {
-                    AgentOutcome::success_with_next(TaskStatus::Planning)
-                };
+        logger::log(format!("[Recovery] id={} retry_count={}", task.id, task.retry_count));
+
+        let output = if let Some(llm) = &self.llm {
+            let prompt = format!(
+                "错误: {}\n重试次数:{}\n请输出 JSON: {{\"action\":\"retry_planning|retry_running|fail_task\",\"reason\":\"...\",\"retryable\":true}}",
+                task.error.clone().unwrap_or_default(),
+                task.retry_count
+            );
+            let text = llm_generate(
+                llm,
+                "你是恢复智能体，只输出 JSON。".to_string(),
+                prompt,
+                ctx.cancellation.clone(),
+            )
+            .await
+            .unwrap_or_default();
+            crate::agents::llm_json::parse_json_with_extract::<RecoveryOutput>(&text).unwrap_or(RecoveryOutput {
+                action: "fail_task".to_string(),
+                reason: "recovery_fallback_json_parse".to_string(),
+                retryable: false,
+            })
+        } else if task.retry_count >= 3 {
+            RecoveryOutput {
+                action: "fail_task".to_string(),
+                reason: "max_retries_reached".to_string(),
+                retryable: false,
             }
-        };
-
-        let prompts = load_agents().ok();
-        let system_prompt = prompts
-            .as_ref()
-            .map(|v| v.recovery.system_prompt.clone())
-            .unwrap_or_else(|| "你是 RecoveryAgent。请输出 JSON。".to_string());
-        let user_prompt_t = prompts
-            .as_ref()
-            .map(|v| v.recovery.user_prompt.clone())
-            .unwrap_or_else(|| "错误：{error}，重试次数：{retry_count}".to_string());
-
-        let request = ChatRequest {
-            system_prompt,
-            user_prompt: user_prompt_t
-                .replace("{error}", &task.error.clone().unwrap_or_default())
-                .replace("{retry_count}", &task.retry_count.to_string()),
-            model: llm.model.clone(),
-            temperature: llm.temperature,
-            max_tokens: llm.max_tokens,
-        };
-
-        let output = match llm.provider.chat(request, ctx.cancellation.clone()).await {
-            Ok(resp) => parse_json_with_extract::<RecoveryOutput>(&resp.content).unwrap_or_else(|| {
-                logger::log("[Recovery] 模型输出解析失败，使用 fail_task fallback");
-                Self::fallback()
-            }),
-            Err(e) => {
-                logger::log(format!("[Recovery] 调用模型失败，使用 fail_task fallback err={}", e));
-                Self::fallback()
+        } else {
+            RecoveryOutput {
+                action: "retry_planning".to_string(),
+                reason: "default_retry".to_string(),
+                retryable: true,
             }
         };
 
@@ -94,5 +75,23 @@ impl Agent for RecoveryAgent {
             "retry_planning" => AgentOutcome::success_with_next(TaskStatus::Planning),
             _ => AgentOutcome::success_with_next(TaskStatus::Failed),
         }
+    }
+
+    fn should_handle(&self, ctx: &MessageContext) -> bool {
+        let m = ctx.message.to_lowercase();
+        m.contains("恢复") || m.contains("重试") || m.contains("retry")
+    }
+
+    async fn generate_reply(&self, ctx: &MessageContext, _history: &[Value]) -> Result<String> {
+        if let Some(llm) = &self.llm {
+            return llm_generate(
+                llm,
+                "你是恢复智能体，擅长故障处理。".to_string(),
+                ctx.message.clone(),
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await;
+        }
+        Ok(format!("[Recovery] 可尝试先缩小问题范围并重试：{}", ctx.message))
     }
 }
