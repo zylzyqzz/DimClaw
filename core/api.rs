@@ -1,4 +1,4 @@
-﻿use std::collections::HashMap;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -9,9 +9,9 @@ use tiny_http::{Header, Method, Response, Server, StatusCode};
 
 use crate::agents::agent::MessageContext;
 use crate::configs::{
-    default_agents, delete_custom_agent, load_agents, load_channels, load_models, load_security, save_agents,
-    save_channels, save_custom_agent, save_models, save_security, AgentsFile, ChannelConfig, CustomAgentConfig,
-    ModelProviderEntry, ModelsFile, SecurityConfig,
+    default_agents, delete_custom_agent, load_agents, load_channels, load_models, load_security,
+    save_agents, save_channels, save_custom_agent, save_models, save_security, AgentsFile,
+    ChannelConfig, CustomAgentConfig, ModelProviderEntry, ModelsFile, SecurityConfig,
 };
 use crate::core::channel_router::route_channel_message;
 use crate::core::hand_scheduler::HandScheduler;
@@ -159,9 +159,23 @@ pub fn run_server(host: String, port: u16, storage: Arc<TaskStorage>) -> Result<
     tokio_block_on(async {
         let _ = plugins::ensure_initialized(api_base).await;
         let _ = plugins::auto_start_enabled_plugins().await;
-        let _ = test_default_model_connection().await;
-        if let Some(s) = HAND_SCHEDULER.get() {
-            let _ = s.start().await;
+        let skip_model_test = std::env::var("DIMCLAW_SKIP_MODEL_TEST")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if !skip_model_test {
+            let _ = test_default_model_connection().await;
+        } else {
+            logger::log("[Web] 已跳过启动时模型连通性测试（DIMCLAW_SKIP_MODEL_TEST）");
+        }
+        let skip_hand_scheduler = std::env::var("DIMCLAW_SKIP_HAND_SCHEDULER")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if !skip_hand_scheduler {
+            if let Some(s) = HAND_SCHEDULER.get() {
+                let _ = s.start().await;
+            }
+        } else {
+            logger::log("[Web] 已跳过 hand scheduler 启动（DIMCLAW_SKIP_HAND_SCHEDULER）");
         }
     });
 
@@ -197,22 +211,46 @@ fn handle_request(
         | (&Method::Get, "/settings/channels")
         | (&Method::Get, "/settings/skills")
         | (&Method::Get, "/settings/plugins") => {
-            return text_response(200, "text/html; charset=utf-8", INDEX_HTML.as_bytes().to_vec());
+            return text_response(
+                200,
+                "text/html; charset=utf-8",
+                INDEX_HTML.as_bytes().to_vec(),
+            );
         }
         (&Method::Get, "/pages/hands.html") => {
-            return text_response(200, "text/html; charset=utf-8", HANDS_HTML.as_bytes().to_vec());
+            return text_response(
+                200,
+                "text/html; charset=utf-8",
+                HANDS_HTML.as_bytes().to_vec(),
+            );
         }
         (&Method::Get, "/pages/marketplace.html") => {
-            return text_response(200, "text/html; charset=utf-8", MARKETPLACE_HTML.as_bytes().to_vec());
+            return text_response(
+                200,
+                "text/html; charset=utf-8",
+                MARKETPLACE_HTML.as_bytes().to_vec(),
+            );
         }
         (&Method::Get, "/pages/channel_detail.html") => {
-            return text_response(200, "text/html; charset=utf-8", CHANNEL_DETAIL_HTML.as_bytes().to_vec());
+            return text_response(
+                200,
+                "text/html; charset=utf-8",
+                CHANNEL_DETAIL_HTML.as_bytes().to_vec(),
+            );
         }
         (&Method::Get, "/pages/audit.html") => {
-            return text_response(200, "text/html; charset=utf-8", AUDIT_HTML.as_bytes().to_vec());
+            return text_response(
+                200,
+                "text/html; charset=utf-8",
+                AUDIT_HTML.as_bytes().to_vec(),
+            );
         }
         (&Method::Get, "/style.css") => {
-            return text_response(200, "text/css; charset=utf-8", STYLE_CSS.as_bytes().to_vec());
+            return text_response(
+                200,
+                "text/css; charset=utf-8",
+                STYLE_CSS.as_bytes().to_vec(),
+            );
         }
         (&Method::Get, "/script.js") => {
             return text_response(
@@ -225,7 +263,11 @@ fn handle_request(
     }
 
     if method == &Method::Get && url.starts_with("/task/") {
-        return text_response(200, "text/html; charset=utf-8", INDEX_HTML.as_bytes().to_vec());
+        return text_response(
+            200,
+            "text/html; charset=utf-8",
+            INDEX_HTML.as_bytes().to_vec(),
+        );
     }
 
     if method == &Method::Get && url == "/api/config/security" {
@@ -392,13 +434,21 @@ fn handle_request(
     if method == &Method::Post && url == "/api/skills/openclaw/import" {
         return match parse_body_json::<SkillImportRequest>(req) {
             Ok(v) => {
-                let source = if v.skill.is_null() { "{}".to_string() } else { v.skill.to_string() };
+                let source = if v.skill.is_null() {
+                    "{}".to_string()
+                } else {
+                    v.skill.to_string()
+                };
                 let rename = if v.rename_to.trim().is_empty() {
                     None
                 } else {
                     Some(v.rename_to)
                 };
-                respond(skills::manager::import_openclaw(&source, v.overwrite, rename))
+                respond(skills::manager::import_openclaw(
+                    &source,
+                    v.overwrite,
+                    rename,
+                ))
             }
             Err(e) => err_response(400, e),
         };
@@ -410,25 +460,37 @@ fn handle_request(
     if method == &Method::Post && url == "/api/skills/import" {
         return match parse_body_json::<serde_json::Value>(req) {
             Ok(body) => {
-                let parsed = serde_json::from_value::<SkillImportRequest>(body.clone()).unwrap_or(SkillImportRequest {
-                    skill: body.clone(),
-                    overwrite: false,
-                    rename_to: String::new(),
-                });
-                let skill_payload = if parsed.skill.is_null() { body } else { parsed.skill };
+                let parsed = serde_json::from_value::<SkillImportRequest>(body.clone()).unwrap_or(
+                    SkillImportRequest {
+                        skill: body.clone(),
+                        overwrite: false,
+                        rename_to: String::new(),
+                    },
+                );
+                let skill_payload = if parsed.skill.is_null() {
+                    body
+                } else {
+                    parsed.skill
+                };
                 let rename = if parsed.rename_to.trim().is_empty() {
                     None
                 } else {
                     Some(parsed.rename_to)
                 };
-                respond(skills::manager::import_custom(skill_payload, parsed.overwrite, rename))
+                respond(skills::manager::import_custom(
+                    skill_payload,
+                    parsed.overwrite,
+                    rename,
+                ))
             }
             Err(e) => err_response(400, e),
         };
     }
     if method == &Method::Delete && url.starts_with("/api/skills/") {
         let name = url.trim_start_matches("/api/skills/");
-        return respond(skills::manager::delete_custom(name).map(|_| serde_json::json!({"success": true})));
+        return respond(
+            skills::manager::delete_custom(name).map(|_| serde_json::json!({"success": true})),
+        );
     }
     if method == &Method::Post && url.starts_with("/api/skills/") && url.ends_with("/test") {
         let name = url
@@ -458,7 +520,9 @@ fn handle_request(
     }
     if method == &Method::Post && url == "/api/marketplace/import" {
         return match parse_body_json::<MarketplaceImportRequest>(req) {
-            Ok(body) => respond(tokio_block_on(marketplace::import_openclaw_online(&body.repo_url))),
+            Ok(body) => respond(tokio_block_on(marketplace::import_openclaw_online(
+                &body.repo_url,
+            ))),
             Err(e) => err_response(400, e),
         };
     }
@@ -473,7 +537,9 @@ fn handle_request(
     if method == &Method::Post && url.starts_with("/api/hands/trigger/") {
         let name = url.trim_start_matches("/api/hands/trigger/").to_string();
         let out = tokio_block_on(async {
-            let scheduler = HAND_SCHEDULER.get().ok_or_else(|| anyhow!("scheduler not initialized"))?;
+            let scheduler = HAND_SCHEDULER
+                .get()
+                .ok_or_else(|| anyhow!("scheduler not initialized"))?;
             scheduler.trigger_now(&name).await
         });
         return respond(out);
@@ -493,7 +559,9 @@ fn handle_request(
         return respond(Ok(serde_json::json!({"success": true})));
     }
     if method == &Method::Put && url.starts_with("/api/hands/") {
-        return respond(Ok(serde_json::json!({"success": true, "message": "当前版本暂不支持持久化修改，已保留接口"})));
+        return respond(Ok(
+            serde_json::json!({"success": true, "message": "当前版本暂不支持持久化修改，已保留接口"}),
+        ));
     }
 
     if method == &Method::Get && url == "/api/plugins" {
@@ -533,9 +601,16 @@ fn handle_request(
     if method == &Method::Put && url.starts_with("/api/plugins/config/") {
         let name = url.trim_start_matches("/api/plugins/config/");
         let payload = parse_body_json::<serde_json::Value>(req).unwrap_or_default();
-        let auto_restart = payload.get("auto_restart").and_then(|v| v.as_bool()).unwrap_or(true);
+        let auto_restart = payload
+            .get("auto_restart")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
         let cfg = plugins::parse_plugin_config_json(payload);
-        return respond(tokio_block_on(plugins::update_plugin_config(name, cfg, auto_restart)));
+        return respond(tokio_block_on(plugins::update_plugin_config(
+            name,
+            cfg,
+            auto_restart,
+        )));
     }
     if method == &Method::Get && url.starts_with("/api/plugins/status/") {
         let name = url.trim_start_matches("/api/plugins/status/");
@@ -631,7 +706,10 @@ fn handle_request(
             let tasks = storage.list_tasks().await?;
             let queue_length = tasks.iter().filter(|t| !t.status.is_terminal()).count();
             let models = load_models()?;
-            let uptime_secs = SERVER_STARTED_AT.get().map(|i| i.elapsed().as_secs()).unwrap_or(0);
+            let uptime_secs = SERVER_STARTED_AT
+                .get()
+                .map(|i| i.elapsed().as_secs())
+                .unwrap_or(0);
             Ok::<_, anyhow::Error>(DashboardStats {
                 uptime_secs,
                 queue_length,
@@ -664,7 +742,11 @@ async fn handle_chat(body: ChatApiRequest) -> Result<ChatApiResponse> {
         let result = skills::manager::test_skill(&intent.skill, intent.args.clone(), 30).await;
         return Ok(match result {
             Ok(v) if v.success => ChatApiResponse {
-                reply: format!("执行成功：{}。{}", intent.human_label, normalize_output(&v.stdout)),
+                reply: format!(
+                    "执行成功：{}。{}",
+                    intent.human_label,
+                    normalize_output(&v.stdout)
+                ),
                 agent_name: "Executor".to_string(),
                 tool_summary: Some(serde_json::json!({
                     "tool": intent.skill,
@@ -676,7 +758,11 @@ async fn handle_chat(body: ChatApiRequest) -> Result<ChatApiResponse> {
                 })),
             },
             Ok(v) => ChatApiResponse {
-                reply: format!("执行失败：{}。错误：{}", intent.human_label, normalize_output(&v.stderr)),
+                reply: format!(
+                    "执行失败：{}。错误：{}",
+                    intent.human_label,
+                    normalize_output(&v.stderr)
+                ),
                 agent_name: "Executor".to_string(),
                 tool_summary: Some(serde_json::json!({
                     "tool": intent.skill,
@@ -732,9 +818,14 @@ fn detect_intent(message: &str, session_key: &str) -> Option<DetectedIntent> {
 
     if (lower.contains("创建") || lower.contains("写入")) && lower.contains("文件") {
         let path = extract_between(text, "文件", "内容").unwrap_or_else(|| "test.txt".to_string());
-        let content = extract_after(text, "内容为").or_else(|| extract_after(text, "内容")).unwrap_or_default();
+        let content = extract_after(text, "内容为")
+            .or_else(|| extract_after(text, "内容"))
+            .unwrap_or_default();
         if content.trim().is_empty() {
-            put_pending(session_key, serde_json::json!({"kind":"file_write","path":path.trim(),"mode":"create"}));
+            put_pending(
+                session_key,
+                serde_json::json!({"kind":"file_write","path":path.trim(),"mode":"create"}),
+            );
             return Some(DetectedIntent {
                 skill: "shell_command".to_string(),
                 args: serde_json::json!({"command":"echo 请补充文件内容，例如：内容为 hello"}),
@@ -750,9 +841,16 @@ fn detect_intent(message: &str, session_key: &str) -> Option<DetectedIntent> {
     }
 
     if let Some(pending) = get_pending(session_key) {
-        if pending.get("kind").and_then(|v| v.as_str()) == Some("file_write") && (lower.contains("内容") || !text.is_empty()) {
-            let path = pending.get("path").and_then(|v| v.as_str()).unwrap_or("test.txt");
-            let content = extract_after(text, "内容为").or_else(|| extract_after(text, "内容")).unwrap_or_else(|| text.to_string());
+        if pending.get("kind").and_then(|v| v.as_str()) == Some("file_write")
+            && (lower.contains("内容") || !text.is_empty())
+        {
+            let path = pending
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("test.txt");
+            let content = extract_after(text, "内容为")
+                .or_else(|| extract_after(text, "内容"))
+                .unwrap_or_else(|| text.to_string());
             clear_pending(session_key);
             return Some(DetectedIntent {
                 skill: "file_write".to_string(),
@@ -763,7 +861,10 @@ fn detect_intent(message: &str, session_key: &str) -> Option<DetectedIntent> {
     }
 
     if lower.contains("读取") && lower.contains(".txt") {
-        let path = text.split_whitespace().find(|s| s.contains(".txt")).unwrap_or("test.txt");
+        let path = text
+            .split_whitespace()
+            .find(|s| s.contains(".txt"))
+            .unwrap_or("test.txt");
         return Some(DetectedIntent {
             skill: "file_read".to_string(),
             args: serde_json::json!({ "path": path }),
@@ -772,7 +873,10 @@ fn detect_intent(message: &str, session_key: &str) -> Option<DetectedIntent> {
     }
 
     if lower.contains("删除") && lower.contains(".txt") {
-        let path = text.split_whitespace().find(|s| s.contains(".txt")).unwrap_or("test.txt");
+        let path = text
+            .split_whitespace()
+            .find(|s| s.contains(".txt"))
+            .unwrap_or("test.txt");
         return Some(DetectedIntent {
             skill: "file_delete".to_string(),
             args: serde_json::json!({ "path": path, "confirm": true }),
@@ -780,7 +884,8 @@ fn detect_intent(message: &str, session_key: &str) -> Option<DetectedIntent> {
         });
     }
 
-    if lower.contains("列出当前目录") || (lower.contains("列出") && lower.contains("目录")) {
+    if lower.contains("列出当前目录") || (lower.contains("列出") && lower.contains("目录"))
+    {
         return Some(DetectedIntent {
             skill: "file_list".to_string(),
             args: serde_json::json!({ "path": "." }),
@@ -840,7 +945,11 @@ fn detect_intent(message: &str, session_key: &str) -> Option<DetectedIntent> {
     }
 
     if lower.contains("重启") && lower.contains("服务") {
-        let svc = text.replace("重启", "").replace("服务", "").trim().to_string();
+        let svc = text
+            .replace("重启", "")
+            .replace("服务", "")
+            .trim()
+            .to_string();
         return Some(DetectedIntent {
             skill: "service_control".to_string(),
             args: serde_json::json!({ "name": if svc.is_empty() {"nginx"} else {svc.as_str()}, "action": "restart" }),
@@ -855,8 +964,16 @@ fn build_session_key(body: &ChatApiRequest) -> String {
     if !body.session_id.trim().is_empty() {
         return body.session_id.clone();
     }
-    let channel = if body.channel.trim().is_empty() { "local" } else { body.channel.trim() };
-    let user = if body.user_id.trim().is_empty() { "anonymous" } else { body.user_id.trim() };
+    let channel = if body.channel.trim().is_empty() {
+        "local"
+    } else {
+        body.channel.trim()
+    };
+    let user = if body.user_id.trim().is_empty() {
+        "anonymous"
+    } else {
+        body.user_id.trim()
+    };
     format!("{}:{}", channel, user)
 }
 
@@ -914,7 +1031,8 @@ fn normalize_output(v: &str) -> String {
 async fn chat_with_default_provider(body: ChatApiRequest) -> Result<ChatApiResponse> {
     let mut models = load_models()?;
     normalize_models_file(&mut models);
-    let provider = select_default_enabled_provider(&models).ok_or_else(|| anyhow!("no provider"))?;
+    let provider =
+        select_default_enabled_provider(&models).ok_or_else(|| anyhow!("no provider"))?;
 
     let client = OpenAiCompatibleProvider::new(
         provider.name.clone(),
@@ -997,7 +1115,12 @@ async fn test_default_model_connection() -> Result<()> {
 
     state.provider = provider.name.clone();
     let out = test_model_connection(provider.name).await?;
-    state.status = if out.success { "connected" } else { "disconnected" }.to_string();
+    state.status = if out.success {
+        "connected"
+    } else {
+        "disconnected"
+    }
+    .to_string();
     state.message = out.message;
     state.last_checked_at = chrono::Utc::now().to_rfc3339();
     set_model_status(state);
@@ -1028,7 +1151,9 @@ fn ensure_hand_scheduler() {
     HAND_SCHEDULER.get_or_init(|| Arc::new(HandScheduler::default()));
 }
 
-fn parse_body_json<T: serde::de::DeserializeOwned>(req: &mut tiny_http::Request) -> std::result::Result<T, String> {
+fn parse_body_json<T: serde::de::DeserializeOwned>(
+    req: &mut tiny_http::Request,
+) -> std::result::Result<T, String> {
     let mut body = String::new();
     req.as_reader()
         .read_to_string(&mut body)
@@ -1063,7 +1188,11 @@ fn json_response(status: u16, body: Vec<u8>) -> Response<std::io::Cursor<Vec<u8>
     resp
 }
 
-fn text_response(status: u16, content_type: &str, body: Vec<u8>) -> Response<std::io::Cursor<Vec<u8>>> {
+fn text_response(
+    status: u16,
+    content_type: &str,
+    body: Vec<u8>,
+) -> Response<std::io::Cursor<Vec<u8>>> {
     Response::new(
         StatusCode(status),
         vec![Header::from_bytes("Content-Type", content_type).unwrap()],
@@ -1074,7 +1203,10 @@ fn text_response(status: u16, content_type: &str, body: Vec<u8>) -> Response<std
 }
 
 fn err_response(status: u16, msg: String) -> Response<std::io::Cursor<Vec<u8>>> {
-    json_response(status, serde_json::to_vec(&serde_json::json!({ "error": msg })).unwrap_or_default())
+    json_response(
+        status,
+        serde_json::to_vec(&serde_json::json!({ "error": msg })).unwrap_or_default(),
+    )
 }
 
 fn split_url_query(raw: &str) -> (String, HashMap<String, String>) {
@@ -1167,5 +1299,3 @@ fn mark_channel_plugin_installed(name: &str, installed: bool) -> Result<()> {
     }
     save_channels(&channels)
 }
-
-

@@ -37,7 +37,7 @@ use core::task::Task;
 use scheduler::SchedulerStore;
 
 #[derive(Parser, Debug)]
-#[command(name = "dimclaw", about = "DimClaw 本地多智能体执行框架 V0.1")]
+#[command(name = "dimclaw", about = "DimClaw 本地多智能体执行框架 V0.4")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -49,7 +49,7 @@ enum Commands {
     Submit {
         #[arg(long, default_value = "最小测试任务")]
         title: String,
-        #[arg(long, default_value = "echo DimClaw V0.1")]
+        #[arg(long, default_value = "echo DimClaw V0.4")]
         command: String,
         #[arg(long, default_value_t = 10)]
         timeout_secs: u64,

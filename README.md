@@ -1,173 +1,203 @@
-﻿# DimClaw
+# DimClaw
 
-<div align="center">
+## 1. 项目简介
 
-**一个本地优先、超轻量、多智能体协作的执行框架**
+DimClaw 是一个使用 Rust 构建的本地任务执行框架，核心定位是：
+- 以任务状态机驱动执行流程；
+- 通过 Planner / Executor / Verifier / Recovery 四阶段协同处理任务；
+- 支持通过技能（Skills）调用系统能力；
+- 提供 CLI 与 Web API 两种操作入口。
 
-[![CI](https://github.com/zylzyqzz/DimClaw/actions/workflows/ci.yml/badge.svg)](https://github.com/zylzyqzz/DimClaw/actions/workflows/ci.yml)
-[![Release](https://github.com/zylzyqzz/DimClaw/actions/workflows/release.yml/badge.svg)](https://github.com/zylzyqzz/DimClaw/actions/workflows/release.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+项目当前以“可运行、可迭代”为目标，强调本地可控与工程化扩展能力。
 
-</div>
+---
 
-## 📖 简介
+## 2. 当前状态（v0.4.0，开发中）
 
-**DimClaw** 是一个 **本地优先**、**超轻量** 的 **多智能体执行框架**。它的核心是一个可恢复、可重试的任务运行时，围绕“任务状态机 + 四智能体分工 + 技能插件”设计。
+- 当前包版本：`v0.4.0`（见 `Cargo.toml`）。
+- 项目已具备端到端最小闭环：提交任务 → 运行状态机 → 执行技能 → 校验/重试 → 持久化。
+- Web 端已提供静态页面入口和一组可用 API。
+- 同时仍存在若干“开发中/预留”模块，见下文“开发中/已预留模块”。
 
-你可以把它看作 **AI 自动化的底层操作系统**——当前版本（v0.1）已完成最小闭环，后续将逐步接入大模型、通信通道、更多技能，让智能体真正“能思考、会干活”。
+---
 
-## ✨ 核心特性
+## 3. 已实现能力
 
-- **本地优先**：所有数据、调度、执行均在本地，不强制依赖云服务。
-- **超轻量**：Rust 实现，Release 二进制仅 1~2 MB，源码仓库小于 100 KB。
-- **任务状态机**：任务有 8 个明确状态（pending → planning → running → verifying → retrying → success/failed/cancelled），状态流转集中管理。
-- **四智能体协作**：
-  - **Planner**：任务规划
-  - **Executor**：执行任务（调用技能）
-  - **Verifier**：验证结果
-  - **Recovery**：失败重试 / 恢复
-- **技能系统**：内置 `shell_command`（可执行系统命令），支持超时、中断；未来可扩展更多技能。
-- **定时任务**：支持 interval 定时投递任务。
-- **持久化**：任务状态实时保存到本地 JSON 文件，系统崩溃后可恢复。
-- **一键安装**：提供 Linux/macOS/Windows 一键安装脚本（从 GitHub Release 下载二进制）。
-- **CI/CD**：GitHub Actions 自动构建、测试、发布三平台二进制。
+### 3.1 CLI 与运行时
 
-## 🚀 快速开始
+已实现命令：
+- `submit`：提交任务
+- `run`：运行任务主循环（支持 `--once`、`--with-scheduler`）
+- `list`：列出任务
+- `schedule`：注册 interval 定时任务
+- `doctor`：检查运行配置与模型配置
+- `server`：启动 Web 服务
 
-### 方式一：从源码编译（需要 Rust 环境）
+运行时能力：
+- 任务状态机：`pending -> planning -> running -> verifying -> retrying -> success/failed/cancelled`
+- 启动时回捞未完成任务并入队
+- 支持 Ctrl+C 取消与安全退出
+- 任务与调度数据本地持久化（JSON）
 
-```bash
-git clone https://github.com/zylzyqzz/DimClaw.git
-cd DimClaw
-cargo build --release
-./target/release/dimclaw --help
+### 3.2 Agent 执行链路
+
+已实现四阶段 Agent：
+- `PlannerAgent`
+- `ExecutorAgent`
+- `VerifierAgent`
+- `RecoveryAgent`
+
+并支持按阶段执行自定义 Agent（`before_xxx` / `after_xxx`）。
+
+### 3.3 Provider（模型接入）
+
+已实现 `OpenAiCompatibleProvider`，包括：
+- `/chat/completions` 请求
+- 超时、重试、退避
+- 取消控制与响应解析
+
+### 3.4 Skills（技能）
+
+已注册并可调用的内置技能包含以下类别：
+
+- 命令执行：`shell_command`、`script_execute`
+- 文件处理：`file_read`、`file_write`、`file_list`、`file_move`、`file_copy`、`file_delete`
+- 网络请求：`http_request`
+- 进程/系统：`process_list`、`process_kill`、`system_monitor`、`service_control`、`schedule_task`
+- 媒体工具封装：`yt_dlp`、`ffmpeg`、`whisper`
+- 浏览器相关：`browser_automator`、`browser_open`、`browser_screenshot`、`browser_click`、`browser_fill`
+
+> 说明：浏览器相关能力并非全部完整自动化；部分实现目前仍为基础态或占位态（例如 `browser_click`、`browser_fill`）。
+
+### 3.5 Web API / 页面入口
+
+`server` 启动后，已提供：
+- 仪表盘与页面入口（静态资源）
+- 任务、配置、技能、插件、聊天等 API
+- 插件状态接口与连接状态检查接口
+
+### 3.6 Feishu 运行态管理（插件侧）
+
+已包含 Feishu sidecar 运行态管理代码（安装状态、进程状态、启停、重启监控、日志缓冲等）。
+
+---
+
+## 4. 开发中/已预留模块
+
+以下模块已存在目录或接口，但完成度仍有限：
+
+- `ui/`：模块已预留，当前仅保留初始化入口
+- `adapters/`：模块已预留，当前仅保留初始化入口
+- `channels/`：含 Feishu/Telegram/Webhook 结构与基础行为，整体仍偏基础实现
+- `memory/`：已提供模块与实现文件，尚未形成完整生产化记忆链路
+- `providers/`：主用链路以 OpenAI Compatible 为主，其他抽象与兜底能力仍在演进
+- `agents/hands`：已具备框架与若干示例能力，整体仍在迭代中
+
+---
+
+## 5. 项目结构说明
+
+```text
+DimClaw/
+├── src/                 # 程序入口（CLI）
+├── core/                # 运行时内核（状态机、任务、存储、API）
+├── agents/              # 四阶段 Agent + 自定义 Agent + hands
+├── skills/              # 技能注册与实现
+├── providers/           # 模型 Provider
+├── plugins/             # 插件管理与安装流程
+├── feishu/              # Feishu sidecar 运行态管理
+├── channels/            # 渠道模块（基础实现）
+├── memory/              # 记忆模块（开发中）
+├── configs/             # 配置模型与配置文件
+├── scheduler/           # 定时任务投递
+├── tests/               # 测试
+└── scripts/             # 脚本工具
 ```
 
-### 方式二：一键安装（推荐）
+---
 
-#### Linux / macOS
-```bash
-curl -fsSL https://raw.githubusercontent.com/zylzyqzz/DimClaw/main/scripts/install.sh | bash
-# 安装后二进制位于 ~/.local/bin/dimclaw
-dimclaw --help
-```
+## 6. 快速开始
 
-#### Windows PowerShell
-```powershell
-iwr -useb https://raw.githubusercontent.com/zylzyqzz/DimClaw/main/scripts/install.ps1 | iex
-# 安装后二进制位于 %USERPROFILE%\.dimclaw\bin\dimclaw.exe
-& "$env:USERPROFILE\.dimclaw\bin\dimclaw.exe" --help
-```
-
-## 📦 使用示例
-
-### 提交一个任务（执行 shell 命令）
+### 6.1 构建
 
 ```bash
-dimclaw submit --title "测试任务" --command "echo hello_dimclaw" --timeout-secs 10
-# 输出任务 ID，例如：2a9f3e1b-7c8d-4e5f-9a0b-1c2d3e4f5g6h
+cargo build
 ```
 
-### 单次运行（处理当前队列中的任务）
+### 6.2 查看帮助
 
 ```bash
-dimclaw run --once
-# 你会看到任务状态流转：pending → planning → running → verifying → success
+cargo run -- --help
+```
+
+### 6.3 启动 Web 服务
+
+```bash
+cargo run -- server --host 127.0.0.1 --port 8080
+```
+
+---
+
+## 7. CLI 命令示例
+
+### 提交任务
+
+```bash
+cargo run -- submit --title "demo" --command "echo hello" --timeout-secs 10
+```
+
+### 执行一次主循环
+
+```bash
+cargo run -- run --once
 ```
 
 ### 查看任务列表
 
 ```bash
-dimclaw list
+cargo run -- list
 ```
 
-输出示例：
-```
-ID                                   TITLE         STATUS    STEP  RETRY  ERROR
-2a9f3e1b-7c8d-4e5f-9a0b-1c2d3e4f5g6h 测试任务      success   4     0      None
-```
-
-### 注册一个定时任务（每 30 秒执行一次）
+### 注册定时任务
 
 ```bash
-dimclaw schedule --title "定时任务" --interval-secs 30 --command "echo scheduled_ok" --timeout-secs 10
+cargo run -- schedule --title "tick" --interval-secs 30 --command "echo tick" --timeout-secs 10
 ```
 
-### 启动运行时（常驻，并开启定时投递）
+### 配置诊断
 
 ```bash
-dimclaw run --with-scheduler
+cargo run -- doctor
 ```
 
-## ⚙️ 配置
+---
 
-配置文件位于 `configs/runtime.toml`（首次运行会自动生成示例）。支持以下配置项：
+## 8. 路线图
 
-```toml
-[runtime]
-data_dir = "./data"      # 任务持久化目录
-log_dir = "./logs"       # 日志目录
-max_retries = 3          # 默认最大重试次数
+结合当前代码完成度，后续按以下节奏推进（以“先稳后扩”为原则）：
 
-[llm]
-enabled = false          # 模型接入开关（V0.2 后可用）
-provider = "default"
+### 阶段 A：稳定性收口（当前优先）
 
-[providers.default]
-protocol = "openai_compatible"
-provider_name = "nvidia"
-base_url = "https://integrate.api.nvidia.com/v1"
-api_key = "YOUR_API_KEY"
-model = "nvidia/qwen/qwen3.5-397b-a17b"
-timeout_secs = 60
-max_tokens = 2048
-temperature = 0.2
-```
+1. 修复并稳定测试基线（优先处理 `server startup timeout` 相关用例）。
+2. 收敛告警与工程规范（`cargo fmt` / `clippy` / CI 门禁一致）。
+3. 持续保持“代码现状—README—版本号”同步更新。
 
-## 🔧 构建与发布
+### 阶段 B：把“占位能力”变成可用能力
 
-本项目使用 GitHub Actions 自动构建和发布：
+1. 浏览器技能从基础态升级到可验证的自动化流程（open/click/fill/screenshot）。
+2. `agents/hands` 从示例能力升级为可配置、可观测、可复用执行单元。
+3. 完善错误分类与审计输出，降低排障成本。
 
-- 每次推送到 `main` 分支，执行 `CI`（`cargo build` + `cargo test`）。
-- 每次推送形如 `v*` 的标签，自动构建 Linux、Windows、macOS 二进制并发布到 Releases。
+### 阶段 C：补齐模块化能力
 
-手动构建 Release 版本：
+1. `channels`：从基础结构推进到真实通道交互链路。
+2. `memory`：完善检索与写入链路，形成可用记忆能力。
+3. `adapters/ui`：从预留入口推进到实际可用模块。
 
-```bash
-cargo build --release
-strip target/release/dimclaw   # （可选）减小体积
-ls -lh target/release/dimclaw*
-```
+> 说明：以上路线图只描述已存在模块的推进方向，不代表这些能力已全部完成。
 
-## 📁 项目结构
+---
 
-```
-dimclaw/
-├── .github/workflows/    # GitHub Actions 配置
-├── core/                 # 运行时内核（状态机、任务、队列、存储）
-├── agents/               # 四智能体实现
-├── skills/               # 技能系统（内置 shell_command）
-├── scheduler/            # 定时任务模块
-├── configs/              # 配置文件
-├── scripts/              # 一键安装脚本
-├── src/                  # 主程序入口
-├── data/                 # 任务数据（运行时生成）
-├── logs/                 # 日志（运行时生成）
-├── Cargo.toml
-└── README.md
-```
+## 9. License
 
-## 🤝 贡献
-
-欢迎任何形式的贡献！如果你有好的想法、发现了 bug，欢迎提交 Issue 或 Pull Request。
-
-## 📄 许可
-
-本项目基于 [MIT 许可证](LICENSE) 开源。
-
-## 🌟 未来计划
-
-- **V0.2**：接入大模型，让智能体真正“会思考”。
-- **V0.3**：飞书通道插件化，支持在聊天工具中派单。
-- **V0.4**：断点续跑、幂等、审计日志，强化执行可靠性。
-- **V1.0**：技能插件市场、工作流 DAG、Agent 集群。
+MIT

@@ -1,5 +1,6 @@
-﻿#![allow(dead_code)]
+#![allow(dead_code)]
 
+use std::fs::OpenOptions;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -53,15 +54,28 @@ pub async fn start_server(options: ServerOptions) -> Result<TestServer> {
     let base_url = format!("http://127.0.0.1:{}", port);
     let bin = resolve_bin_path()?;
 
+    let stdout_log = root_dir.join("server.stdout.log");
+    let stderr_log = root_dir.join("server.stderr.log");
+    let stdout_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&stdout_log)?;
+    let stderr_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&stderr_log)?;
+
     let mut cmd = Command::new(bin);
     cmd.arg("server")
         .arg("--host")
         .arg("127.0.0.1")
         .arg("--port")
         .arg(port.to_string())
+        .env("DIMCLAW_SKIP_MODEL_TEST", "1")
+        .env("DIMCLAW_SKIP_HAND_SCHEDULER", "1")
         .current_dir(&root_dir)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file));
     for (k, v) in options.extra_env {
         cmd.env(k, v);
     }
@@ -69,10 +83,10 @@ pub async fn start_server(options: ServerOptions) -> Result<TestServer> {
     let child = cmd.spawn()?;
     let server = TestServer {
         base_url: base_url.clone(),
-        root_dir,
+        root_dir: root_dir.clone(),
         child,
     };
-    wait_until_ready(&base_url).await?;
+    wait_until_ready(&base_url, &root_dir).await?;
     Ok(server)
 }
 
@@ -124,9 +138,9 @@ fn find_free_port() -> Result<u16> {
     Ok(listener.local_addr()?.port())
 }
 
-async fn wait_until_ready(base_url: &str) -> Result<()> {
-    let client = Client::new();
-    for _ in 0..50 {
+async fn wait_until_ready(base_url: &str, root_dir: &Path) -> Result<()> {
+    let client = Client::builder().no_proxy().build()?;
+    for _ in 0..100 {
         if let Ok(resp) = client
             .get(format!("{}/api/dashboard/stats", base_url))
             .send()
@@ -138,7 +152,20 @@ async fn wait_until_ready(base_url: &str) -> Result<()> {
         }
         sleep(Duration::from_millis(200)).await;
     }
-    Err(anyhow!("server startup timeout"))
+    let stdout_tail = read_tail(root_dir.join("server.stdout.log"), 40);
+    let stderr_tail = read_tail(root_dir.join("server.stderr.log"), 40);
+    Err(anyhow!(
+        "server startup timeout\nstdout_tail:\n{}\nstderr_tail:\n{}",
+        stdout_tail,
+        stderr_tail
+    ))
+}
+
+fn read_tail(path: PathBuf, max_lines: usize) -> String {
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+    let lines: Vec<&str> = content.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join("\n")
 }
 
 fn make_temp_workspace() -> Result<PathBuf> {
@@ -164,10 +191,17 @@ fn resolve_bin_path() -> Result<String> {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("target");
     path.push("debug");
-    path.push(if cfg!(windows) { "dimclaw.exe" } else { "dimclaw" });
+    path.push(if cfg!(windows) {
+        "dimclaw.exe"
+    } else {
+        "dimclaw"
+    });
     if path.exists() {
         return Ok(path.display().to_string());
     }
 
-    Err(anyhow!("missing dimclaw binary, expected {}", path.display()))
+    Err(anyhow!(
+        "missing dimclaw binary, expected {}",
+        path.display()
+    ))
 }
